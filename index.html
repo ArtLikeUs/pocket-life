@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Pocket Life">
+<meta name="theme-color" content="#161426">
+<meta name="description" content="Pocket Life — a tiny life sim for your pocket.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css?v=8">
+<title>Pocket Life</title>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div id="who"><span class="mood">🙂</span><span class="nm">…</span></div>
+    <div id="clock"><b>Day 1</b><br>08:00</div>
+    <div id="rightTop">
+      <div id="coins">💰 500</div>
+      <button id="speedBtn">▶︎ 1×</button>
+    </div>
+  </header>
+  <div id="xpWrap"><div id="xpBar"></div></div>
+  <div style="display:flex;align-items:center;gap:8px;padding:0 4px">
+    <span class="lvlBadge" id="lvlBadge">Lv 1 · Intern</span>
+  </div>
+  <div id="canvasWrap">
+    <canvas id="cv"></canvas>
+    <div id="awayChip"></div>
+  </div>
+  <div id="actionbar">
+    <button id="outBtn">🚪 Go Out</button>
+    <button id="workBtn">💼 Work</button>
+    <button id="shopBtn">🛍️ Shop</button>
+    <button id="lifeBtn">👪 Life</button>
+  </div>
+  <footer id="needs"></footer>
+  <div id="toasts"></div>
+</div>
+
+<!-- contextual bottom sheet -->
+<div id="sheetWrap"><div id="sheetBack"></div><div id="sheet"></div></div>
+
+<!-- generic modal (shop / quests / family / save) -->
+<div class="modal" id="genModal"><div class="card" id="genCard"></div></div>
+
+<!-- profile / login -->
+<div class="modal" id="profileModal">
+  <div class="card">
+    <h2>Pocket Life 🏡</h2>
+    <div class="sub">Choose a saved life, or start a new one.</div>
+    <div id="profileList"></div>
+    <button class="bigbtn" id="newLifeBtn">➕ New life</button>
+    <button class="linkbtn" id="loadCodeLink">Have a transfer code? Load it</button>
+  </div>
+</div>
+
+<!-- character creator -->
+<div class="modal" id="createModal">
+  <div class="card">
+    <h2>Create your Sim ✨</h2>
+    <div class="sub">Make them yours — you can buy a new look later too.</div>
+    <canvas id="previewCv"></canvas>
+    <label>Name</label>
+    <input type="text" id="nameInput" maxlength="12" value="Alex" autocomplete="off">
+    <label>Skin tone</label>
+    <div class="swatches" id="skinSw"></div>
+    <label>Hair color</label>
+    <div class="swatches" id="hairSw"></div>
+    <label>Hair style</label>
+    <div class="pillrow" id="hairStyleSw"></div>
+    <label>Shirt</label>
+    <div class="swatches" id="shirtSw"></div>
+    <button class="bigbtn" id="startBtn">Start living ✨</button>
+    <button class="linkbtn" id="backToProfiles">← Back to profiles</button>
+  </div>
+</div>
+
+<script src="data.js?v=8"></script>
+<script src="engine.js?v=8"></script>
+<script>
+  // wire UI buttons to engine
+  document.getElementById('outBtn').addEventListener('click', () => Game.toggleOut());
+  document.getElementById('workBtn').addEventListener('click', () => Game.quickWork());
+  document.getElementById('shopBtn').addEventListener('click', () => Game.openShop());
+  document.getElementById('lifeBtn').addEventListener('click', () => Game.openFamily());
+  document.getElementById('speedBtn').addEventListener('click', () => Game.toggleSpeed());
+  document.getElementById('newLifeBtn').addEventListener('click', () => Game.showCreate());
+  document.getElementById('loadCodeLink').addEventListener('click', () => {
+    const code = prompt('Paste your transfer code:');
+    if (code) { try { localStorage.setItem('pl-pending-code', code); } catch(e){} location.reload(); }
+  });
+
+  // boot: pending code? else profiles
+  (function boot(){
+    const pending = (function(){ try { return localStorage.getItem('pl-pending-code'); } catch(e){ return null; } })();
+    Game.startLoop();
+    Game.bootProfiles();
+    document.getElementById('lifeBtn'); // ensure exists
+    if (pending) {
+      try { localStorage.removeItem('pl-pending-code'); } catch(e){}
+      // hand to engine via the Save loader after a profile is needed — simplest: alert user to load inside game
+      setTimeout(()=>{ alert('After choosing or creating a profile, open 👪 Life → Save → Load a code to import.'); }, 300);
+    }
+  })();
+
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  }
+</script>
+</body>
+</html>

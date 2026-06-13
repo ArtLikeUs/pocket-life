@@ -1,0 +1,1650 @@
+"use strict";
+/* ===================== Pocket Life v2 — engine ===================== */
+/* depends on data.js (T, VIEW_COLS/ROWS, HOME_TIERS, TOWN_*, NPCS, FOODS_*, VEHICLES, GIFTS, QUEST_POOL, OBJTYPES, NEEDS, JOBS, etc.) */
+
+const Game = (() => {
+
+/* ---------------- palette ---------------- */
+const COL = {
+  grass1:'#7bc86c', grass2:'#74c065', grassEdge:'#5fa854',
+  path:'#d9c08f', pathEdge:'#c4a874',
+  tree:'#2f7d3a', treeDk:'#235e2b', treeTrunk:'#7a5230',
+  water:'#5ab4e0', waterDk:'#3f9bc9',
+  flower:['#ff6b9d','#ffd93d','#ff8c42','#c77dff'],
+  outline:'#1d1626', shadow:'rgba(20,10,30,.22)',
+};
+
+/* ---------------- runtime ---------------- */
+let S = null;                       // saved game state
+let profileId = null;
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let scale = 1, vw = VIEW_COLS*T, vh = VIEW_ROWS*T;
+
+let scene = null;                   // {type, map, cols, rows, solid:Set, furnAt:Map, doors:Map}
+let cam = {x:0, y:0};
+let path = [], pending = null, action = null, facing='S', walkT=0;
+let npcSprites = [];                // town npc runtime
+let parts = [];                     // particles
+let speed = 1, paused = false, transition = 0, transitionTo = null;
+let lastFootEvt = 0;
+
+/* ---------------- audio (tiny synth, no assets) ---------------- */
+let AC = null;
+function blip(freq=440, dur=0.08, type='sine', vol=0.05){
+  try{
+    if(!AC) AC = new (window.AudioContext||window.webkitAudioContext)();
+    if(AC.state==='suspended') AC.resume();
+    const o=AC.createOscillator(), g=AC.createGain();
+    o.type=type; o.frequency.value=freq; o.connect(g); g.connect(AC.destination);
+    g.gain.setValueAtTime(vol, AC.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime+dur);
+    o.start(); o.stop(AC.currentTime+dur);
+  }catch(e){}
+}
+function chord(freqs, dur=0.18){ freqs.forEach((f,i)=>setTimeout(()=>blip(f,dur,'triangle',0.06), i*55)); }
+const SFX = {
+  tap:()=>blip(520,0.05,'square',0.03),
+  good:()=>chord([523,659,784]),
+  coin:()=>{ blip(880,0.06,'square',0.05); setTimeout(()=>blip(1175,0.08,'square',0.05),60); },
+  level:()=>chord([523,659,784,1047],0.22),
+  heart:()=>{ blip(660,0.09,'sine',0.05); setTimeout(()=>blip(990,0.12,'sine',0.05),90); },
+  eat:()=>blip(300,0.12,'sine',0.05),
+  err:()=>blip(160,0.12,'sawtooth',0.04),
+};
+
+/* ---------------- helpers ---------------- */
+const el = id => document.getElementById(id);
+function clamp(v,a,b){ return v<a?a:v>b?b:v; }
+function hash(c,r){ let h=(c*73856093)^(r*19349663); h=(h^(h>>>13))>>>0; return h/4294967295; }
+function shade(hex,f){ const n=parseInt(hex.slice(1),16); let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  r=clamp(Math.round(r*f),0,255); g=clamp(Math.round(g*f),0,255); b=clamp(Math.round(b*f),0,255);
+  return 'rgb('+r+','+g+','+b+')'; }
+function rr(x,y,w,h,rad,fill,stroke){
+  ctx.beginPath(); ctx.moveTo(x+rad,y);
+  ctx.arcTo(x+w,y,x+w,y+h,rad); ctx.arcTo(x+w,y+h,x,y+h,rad);
+  ctx.arcTo(x,y+h,x,y,rad); ctx.arcTo(x,y,x+w,y,rad); ctx.closePath();
+  if(fill){ ctx.fillStyle=fill; ctx.fill(); }
+  if(stroke){ ctx.strokeStyle=stroke; ctx.lineWidth=stroke._w||1.5; ctx.stroke(); }
+}
+
+/* ---------------- toast / particles ---------------- */
+function toast(msg){
+  const box=el('toasts'); const t=document.createElement('div');
+  t.className='toast'; t.textContent=msg; box.appendChild(t);
+  while(box.children.length>3) box.firstChild.remove();
+  setTimeout(()=>t.remove(),2600);
+}
+function burst(wx, wy, kind, text){
+  if(kind==='coin'){ for(let i=0;i<10;i++) parts.push({x:wx,y:wy,vx:(Math.random()-.5)*70,vy:-50-Math.random()*60,life:0.9,t:'coin'}); }
+  if(kind==='confetti'){ for(let i=0;i<26;i++) parts.push({x:wx,y:wy,vx:(Math.random()-.5)*160,vy:-90-Math.random()*120,life:1.3,t:'conf',c:`hsl(${Math.random()*360},90%,60%)`}); }
+  if(kind==='heart'){ for(let i=0;i<6;i++) parts.push({x:wx+(Math.random()-.5)*14,y:wy,vx:(Math.random()-.5)*20,vy:-30-Math.random()*20,life:1.1,t:'heart'}); }
+  if(kind==='spark'){ for(let i=0;i<8;i++) parts.push({x:wx,y:wy,vx:(Math.random()-.5)*90,vy:(Math.random()-.5)*90,life:0.5,t:'spark'}); }
+  if(text) parts.push({x:wx,y:wy-6,vx:0,vy:-26,life:1.1,t:'txt',text});
+}
+function updateParts(dt){
+  for(const p of parts){ p.x+=p.vx*dt; p.y+=p.vy*dt; if(p.t!=='txt') p.vy+=240*dt; p.life-=dt; }
+  parts = parts.filter(p=>p.life>0);
+}
+function drawParts(){
+  for(const p of parts){
+    const a=clamp(p.life,0,1); ctx.globalAlpha=a;
+    if(p.t==='coin'){ ctx.fillStyle='#ffd76a'; ctx.beginPath(); ctx.arc(p.x,p.y,4,0,7); ctx.fill(); ctx.strokeStyle='#b8860b'; ctx.lineWidth=1; ctx.stroke(); }
+    else if(p.t==='conf'){ ctx.fillStyle=p.c; ctx.fillRect(p.x,p.y,4,4); }
+    else if(p.t==='heart'){ ctx.font='14px sans-serif'; ctx.fillText('❤️',p.x-7,p.y); }
+    else if(p.t==='spark'){ ctx.fillStyle='#fff'; ctx.fillRect(p.x,p.y,2.5,2.5); }
+    else if(p.t==='txt'){ ctx.font='800 13px -apple-system'; ctx.textAlign='center';
+      ctx.lineWidth=3; ctx.strokeStyle='rgba(0,0,0,.5)'; ctx.strokeText(p.text,p.x,p.y);
+      ctx.fillStyle='#fff'; ctx.fillText(p.text,p.x,p.y); ctx.textAlign='left'; }
+    ctx.globalAlpha=1;
+  }
+}
+
+/* ============================================================ */
+/*                       SCENE BUILDING                         */
+/* ============================================================ */
+function homeDef(){ return HOME_TIERS[S.homeTier]; }
+
+function buildHome(){
+  const def = homeDef();
+  const map = def.map, rows=map.length, cols=map[0].length;
+  const solid=new Set(), furnAt=new Map(), doors=new Map();
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) if(map[r][c]==='#') solid.add(c+','+r);
+  for(const f of def.furn){
+    const meta=OBJTYPES[f.t]; if(!meta) continue;
+    const obj={...f, meta};
+    for(const [dx,dy] of meta.fp){ const k=(f.c+dx)+','+(f.r+dy); solid.add(k); furnAt.set(k,obj); }
+  }
+  // exit door tiles are passable triggers
+  for(const e of def.exit){ solid.delete(e[0]+','+e[1]); doors.set(e[0]+','+e[1],'town'); }
+  scene={type:'home', map, cols, rows, solid, furnAt, doors};
+  buildHomies();
+}
+
+function buildTown(){
+  const map=TOWN_MAP, rows=map.length, cols=map[0].length;
+  const solid=new Set(), furnAt=new Map(), doors=new Map();
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){ const ch=map[r][c]; if(ch==='T'||ch==='w') solid.add(c+','+r); }
+  for(const b of BUILDINGS){
+    for(let yy=0; yy<b.h; yy++) for(let xx=0; xx<b.w; xx++) solid.add((b.x+xx)+','+(b.y+yy));
+    doors.set(b.door[0]+','+b.door[1], 'B:'+b.id);
+    solid.delete(b.door[0]+','+b.door[1]);
+  }
+  for(const f of TOWN_FURN){
+    const meta=OBJTYPES[f.t]; const obj={...f,meta};
+    for(const [dx,dy] of meta.fp){ const k=(f.c+dx)+','+(f.r+dy); solid.add(k); furnAt.set(k,obj); }
+  }
+  scene={type:'town', map, cols, rows, solid, furnAt, doors};
+  // npc sprites (your partner lives with you now, not in town)
+  npcSprites = NPCS.filter(n=>n.id!==S.partner).map(n=>({ def:n, px:(n.anchor[0]+.5)*T, py:(n.anchor[1]+.5)*T, dir:'S', wt:0, cool:Math.random()*3, tpath:[] }));
+}
+
+/* ----- household sprites (partner & kids at home) ----- */
+let homies=[];
+function buildHomies(){
+  homies=[];
+  if(!scene||scene.type!=='home') return;
+  const def=homeDef();
+  if(S.partner){ const pn=NPCS.find(n=>n.id===S.partner); const z=def.partnerZone;
+    homies.push({kind:'partner', id:pn.id, name:pn.name, look:{skin:pn.skin,shirt:pn.shirt,hair:pn.hair,style:pn.style},
+      px:(z.x+1+.5)*T, py:(z.y+1+.5)*T, zone:z, dir:'S', wt:0, cool:1+Math.random()*3, tpath:[], sc:1});
+  }
+  (S.kids||[]).forEach((k,i)=>{ if(k.ageDays<3) return;   // babies stay in the crib
+    const z=def.kidZone;
+    homies.push({kind:'kid', idx:i, name:k.name, look:{skin:S.skin,shirt:k.shirt||'#ffd93d',hair:S.hair,style:0},
+      px:(z.x+1+(i%Math.max(1,z.w-1))+.5)*T, py:(z.y+1+.5)*T, zone:z, dir:'S', wt:0, cool:1+Math.random()*2, tpath:[], sc:k.ageDays>=8?0.85:0.7});
+  });
+}
+function tickHomies(dt){
+  if(!scene||scene.type!=='home') return;
+  for(const n of homies){
+    if(n.tpath.length){ let dist=T*1.1*dt;
+      while(dist>0&&n.tpath.length){ const t2=n.tpath[0]; const dx=t2.x-n.px,dy=t2.y-n.py,d=Math.hypot(dx,dy);
+        if(Math.abs(dx)>Math.abs(dy)) n.dir=dx>0?'E':'W'; else n.dir=dy>0?'S':'N';
+        if(d<=dist){ n.px=t2.x; n.py=t2.y; n.tpath.shift(); dist-=d; } else { n.px+=dx/d*dist; n.py+=dy/d*dist; dist=0; } }
+      n.wt+=dt*9;
+    } else { n.cool-=dt; if(n.cool<=0){ n.cool=3+Math.random()*5;
+      const z=n.zone; const tc=z.x+Math.floor(Math.random()*z.w), tr=z.y+Math.floor(Math.random()*z.h);
+      const p=findPath(Math.floor(n.px/T),Math.floor(n.py/T),tc,tr); if(p&&p.length&&p.length<10) n.tpath=p; } }
+  }
+}
+
+function gotoScene(type, spawnTile){
+  transition=1; transitionTo=()=>{
+    if(type==='home') buildHome(); else buildTown();
+    const sp = spawnTile || (type==='home'? homeDef().spawn : TOWN_SPAWN);
+    S.px=(sp[0]+.5)*T; S.py=(sp[1]+.5)*T; S.scene=type;
+    path=[]; pending=null; action=null;
+    centerCam(true);
+  };
+}
+
+/* ============================================================ */
+/*                    GRID / PATHFINDING                        */
+/* ============================================================ */
+function walkable(c,r){ return c>=0&&r>=0&&c<scene.cols&&r<scene.rows&&!scene.solid.has(c+','+r); }
+function findPath(c0,r0,c1,r1){
+  if(!walkable(c1,r1)) return null;
+  if(c0===c1&&r0===r1) return [];
+  const prev=new Map(), q=[[c0,r0]]; prev.set(c0+','+r0,null);
+  let head=0;
+  while(head<q.length){
+    const [c,r]=q[head++];
+    for(const [dc,dr] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const nc=c+dc,nr=r+dr,k=nc+','+nr;
+      if(!walkable(nc,nr)||prev.has(k)) continue;
+      prev.set(k,[c,r]);
+      if(nc===c1&&nr===r1){
+        const out=[]; let cur=[nc,nr];
+        while(cur){ out.unshift(cur); cur=prev.get(cur[0]+','+cur[1]); }
+        out.shift();
+        return out.map(([c,r])=>({x:(c+.5)*T,y:(r+.5)*T}));
+      }
+      q.push([nc,nr]);
+    }
+  }
+  return null;
+}
+function adjFree(c,r){ // nearest walkable tile next to (c,r) for interacting
+  for(const [dc,dr] of [[0,1],[0,-1],[1,0],[-1,0],[1,1],[-1,1],[1,-1],[-1,-1]])
+    if(walkable(c+dc,r+dr)) return [c+dc,r+dr];
+  return null;
+}
+function curTile(){ return [Math.floor(S.px/T), Math.floor(S.py/T)]; }
+
+function goTo(c,r,then){
+  const [pc,pr]=curTile();
+  const p=findPath(pc,pr,c,r);
+  if(p===null){ toast("Can't reach there 🚧"); SFX.err(); return false; }
+  if(action&&action.returnPx){ S.px=action.returnPx[0]; S.py=action.returnPx[1]; }
+  action=null; path=p; pending=then||null; return true;
+}
+function goNextTo(c,r,then){
+  const a=adjFree(c,r); if(!a){ toast("Can't get to it 🚧"); SFX.err(); return false; }
+  return goTo(a[0],a[1],then);
+}
+
+/* ============================================================ */
+/*                        RENDERING                             */
+/* ============================================================ */
+function resize(){
+  const wrap=el('canvasWrap');
+  scale=Math.min(wrap.clientWidth/vw, wrap.clientHeight/vh);
+  const dpr=window.devicePixelRatio||1;
+  cv.style.width=vw*scale+'px'; cv.style.height=vh*scale+'px';
+  cv.width=Math.round(vw*scale*dpr); cv.height=Math.round(vh*scale*dpr);
+  ctx.setTransform(scale*dpr,0,0,scale*dpr,0,0);
+  ctx.imageSmoothingEnabled=false;
+}
+function centerCam(snap){
+  const worldW=scene.cols*T, worldH=scene.rows*T;
+  let tx=S.px-vw/2, ty=S.py-vh/2;
+  tx=clamp(tx,0,Math.max(0,worldW-vw)); ty=clamp(ty,0,Math.max(0,worldH-vh));
+  if(worldW<vw) tx=(worldW-vw)/2; if(worldH<vh) ty=(worldH-vh)/2;
+  if(snap){ cam.x=tx; cam.y=ty; } else { cam.x+=(tx-cam.x)*0.18; cam.y+=(ty-cam.y)*0.18; }
+}
+
+/* ----- tiles ----- */
+function drawTerrain(){
+  const c0=Math.floor(cam.x/T), r0=Math.floor(cam.y/T);
+  const c1=Math.min(scene.cols, c0+VIEW_COLS+2), r1=Math.min(scene.rows, r0+VIEW_ROWS+2);
+  for(let r=Math.max(0,r0); r<r1; r++) for(let c=Math.max(0,c0); c<c1; c++){
+    const x=c*T-cam.x, y=r*T-cam.y, ch=scene.map[r][c];
+    if(scene.type==='town') drawTownTile(x,y,c,r,ch);
+    else drawHomeTile(x,y,c,r,ch);
+  }
+}
+function drawTownTile(x,y,c,r,ch){
+  const now=performance.now();
+  // base grass everywhere
+  ctx.fillStyle=(c+r)%2?COL.grass1:COL.grass2; ctx.fillRect(x,y,T,T);
+  const h=hash(c,r);
+  if(ch!=='w'&&ch!=='p'&&h>0.78){ ctx.fillStyle=COL.grassEdge;
+    ctx.fillRect(x+4+h*18, y+6+h*16, 2,4); ctx.fillRect(x+8+h*10,y+12+h*12,2,4); ctx.fillRect(x+22-h*8,y+20-h*6,2,3); }
+  if(ch==='p'){
+    ctx.fillStyle=COL.path; ctx.fillRect(x,y,T,T);
+    // soft edges where path meets grass
+    const nb=(dc,dr)=>{ const cc=c+dc, rw=r+dr; return (cc>=0&&rw>=0&&cc<scene.cols&&rw<scene.rows)?scene.map[rw][cc]:'p'; };
+    ctx.fillStyle=COL.pathEdge;
+    if(nb(0,-1)!=='p') ctx.fillRect(x,y,T,2.5);
+    if(nb(0,1)!=='p')  ctx.fillRect(x,y+T-2.5,T,2.5);
+    if(nb(-1,0)!=='p') ctx.fillRect(x,y,2.5,T);
+    if(nb(1,0)!=='p')  ctx.fillRect(x+T-2.5,y,2.5,T);
+    if(h>.55){ ctx.fillStyle=shade(COL.path,0.88); ctx.fillRect(x+6+h*8,y+8+h*10,4,3); }
+    if(h<.25){ ctx.fillStyle=shade(COL.path,1.08); ctx.fillRect(x+18,y+20,5,3); }
+  }
+  if(ch===','){ // tall grass with a gentle sway
+    const sway=Math.sin(now/650+c*1.7+r)*1.6;
+    ctx.fillStyle='#55a04b';
+    for(let i=0;i<5;i++){ const gx=x+4+i*6;
+      ctx.beginPath(); ctx.moveTo(gx,y+T-3); ctx.lineTo(gx-2+sway,y+T-13); ctx.lineTo(gx+2+sway,y+T-13); ctx.closePath(); ctx.fill(); }
+    ctx.fillStyle='#6db95f';
+    for(let i=0;i<4;i++){ const gx=x+7+i*6;
+      ctx.beginPath(); ctx.moveTo(gx,y+T-3); ctx.lineTo(gx-1.5+sway,y+T-9); ctx.lineTo(gx+1.5+sway,y+T-9); ctx.closePath(); ctx.fill(); } }
+  if(ch==='f'){ const fc=COL.flower[Math.floor(h*4)]; const sw2=Math.sin(now/600+c*3+r)*1.2;
+    for(const [ox,oy] of [[10,12],[21,17],[14,23]]){
+      ctx.strokeStyle='#4d8a44'; ctx.lineWidth=1.4;
+      ctx.beginPath(); ctx.moveTo(x+ox,y+oy+6); ctx.lineTo(x+ox+sw2,y+oy); ctx.stroke();
+      for(let p=0;p<4;p++){ const a=p*Math.PI/2 + h*6;
+        ctx.fillStyle=fc; ctx.beginPath(); ctx.arc(x+ox+sw2+Math.cos(a)*2.6,y+oy+Math.sin(a)*2.6,2,0,7); ctx.fill(); }
+      ctx.fillStyle='#ffe14d'; ctx.beginPath(); ctx.arc(x+ox+sw2,y+oy,1.6,0,7); ctx.fill(); } }
+  if(ch==='w'){
+    ctx.fillStyle=COL.waterDk; ctx.fillRect(x,y,T,T);
+    ctx.fillStyle=COL.water;
+    for(let i=0;i<3;i++){ const wy2=y+4+i*11+Math.sin(now/520+c*1.3+i*2)*2; ctx.fillRect(x+1,wy2,T-2,5); }
+    ctx.fillStyle='rgba(255,255,255,.4)';
+    ctx.fillRect(x+6+Math.sin(now/430+c)*3, y+9+Math.cos(now/600+r)*2, 6,1.6);
+    ctx.fillRect(x+18+Math.sin(now/380+r)*3, y+22, 5,1.6);
+  }
+  if(ch==='T') drawTree(x,y);
+}
+function drawTree(x,y){
+  ctx.fillStyle='rgba(20,10,30,.18)'; ctx.beginPath(); ctx.ellipse(x+T/2,y+T-4,13,4.5,0,0,7); ctx.fill();
+  ctx.fillStyle=COL.treeTrunk; ctx.fillRect(x+T/2-3,y+T-13,6,12);
+  ctx.fillStyle=shade(COL.treeTrunk,0.75); ctx.fillRect(x+T/2+1,y+T-13,2,12);
+  ctx.fillStyle=COL.treeDk; ctx.beginPath(); ctx.arc(x+T/2,y+T/2,15,0,7); ctx.fill();
+  ctx.fillStyle=COL.tree; ctx.beginPath(); ctx.arc(x+T/2-3,y+T/2-3,13,0,7); ctx.fill();
+  ctx.fillStyle='#8fd47e'; ctx.beginPath(); ctx.arc(x+T/2-6,y+T/2-6,6,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.2)'; ctx.beginPath(); ctx.arc(x+T/2-7,y+T/2-8,2.5,0,7); ctx.fill();
+}
+function roomAt(c,r,def){ for(const rm of def.rooms){ if(c>=rm.x&&c<rm.x+rm.w&&r>=rm.y&&r<rm.y+rm.h) return rm; } return null; }
+const FLOOR_PAT={'#a8d4e2':'tile','#eedaa6':'tile','#e2c2a4':'wood','#c9b3dd':'carpet','#f3cdd6':'carpet'};
+function drawHomeTile(x,y,c,r,ch){
+  const def=homeDef();
+  if(ch==='#'){
+    // wall: dark cap + wallpaper face tinted by the room below + baseboard
+    const below=roomAt(c,r+1,def);
+    const wp=below?below.wp:'#574a66';
+    ctx.fillStyle='#352e44'; ctx.fillRect(x,y,T,T*0.45);
+    ctx.fillStyle=wp; ctx.fillRect(x,y+T*0.45,T,T*0.55);
+    ctx.fillStyle='rgba(255,255,255,.10)'; ctx.fillRect(x,y+T*0.45,T,2);
+    ctx.fillStyle='rgba(255,255,255,.06)';
+    for(let i=0;i<3;i++) ctx.fillRect(x+4+i*11,y+T*0.52,4,T*0.4);
+    ctx.fillStyle=shade(wp,0.55); ctx.fillRect(x,y+T-4,T,4);
+    ctx.fillStyle='rgba(0,0,0,.28)'; ctx.fillRect(x,y,T,2);
+    return;
+  }
+  const rm=roomAt(c,r,def); const floor=rm?rm.floor:'#2a2440';
+  const pat=FLOOR_PAT[floor]||'carpet';
+  ctx.fillStyle=floor; ctx.fillRect(x,y,T,T);
+  if(pat==='wood'){
+    ctx.fillStyle=shade(floor,0.9);
+    ctx.fillRect(x,y+T/2-0.5,T,1.5);                       // plank seam
+    ctx.fillRect(x+((r%2)?T*0.3:T*0.7),y+(((c+r)%2)?2:T/2+2),1.5,T/2-3); // staggered joints
+    ctx.fillStyle='rgba(255,255,255,.05)'; ctx.fillRect(x,y+1,T,1.5);
+  } else if(pat==='tile'){
+    ctx.strokeStyle='rgba(255,255,255,.4)'; ctx.lineWidth=1;
+    ctx.strokeRect(x+0.5,y+0.5,T/2,T/2); ctx.strokeRect(x+T/2+0.5,y+T/2+0.5,T/2-1,T/2-1);
+    if((c+r)%2){ ctx.fillStyle='rgba(0,0,0,.045)'; ctx.fillRect(x,y,T,T); }
+  } else {
+    if((c+r)%2){ ctx.fillStyle='rgba(255,255,255,.045)'; ctx.fillRect(x,y,T,T); }
+    const h=hash(c,r); ctx.fillStyle='rgba(0,0,0,.07)';
+    ctx.fillRect(x+5+h*16,y+7+h*12,2,2); ctx.fillRect(x+22-h*9,y+22-h*7,2,2);
+  }
+  ctx.strokeStyle='rgba(0,0,0,.05)'; ctx.lineWidth=1; ctx.strokeRect(x+0.5,y+0.5,T-1,T-1);
+  // exit mat
+  for(const e of def.exit){ if(e[0]===c&&e[1]===r){ rr(x+3,y+4,T-6,T-10,4,'#8a6a4a'); ctx.fillStyle='#ffd76a'; ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.fillText('🚪',x+T/2,y+T/2+4); ctx.textAlign='left'; } }
+}
+
+/* ----- buildings (town) ----- */
+function drawBuildings(){
+  const night=isNight();
+  for(const b of BUILDINGS){
+    const x=b.x*T-cam.x, y=b.y*T-cam.y, w=b.w*T, h=b.h*T;
+    if(x>vw||y>vh||x+w<0||y+h<0) continue;
+    // ground shadow
+    ctx.fillStyle='rgba(20,10,30,.16)'; ctx.beginPath(); ctx.ellipse(x+w/2,y+h-1,w/2,6,0,0,7); ctx.fill();
+    // body
+    rr(x+2,y+T*0.7,w-4,h-T*0.7,5,b.wall);
+    ctx.strokeStyle=COL.outline; ctx.lineWidth=2; ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,.13)'; ctx.fillRect(x+4,y+T*0.74,w-8,4);   // top light
+    ctx.fillStyle='rgba(0,0,0,.12)'; ctx.fillRect(x+4,y+h-7,w-8,5);            // base shade
+    // windows with frames + sills (skip the door column)
+    const winN=Math.max(2,b.w-2);
+    for(let i=0;i<winN;i++){
+      const wx2=x+(w/winN)*(i+0.5)-9, wy2=y+T*1.02;
+      if(Math.abs((wx2+9)-(b.door[0]*T-cam.x+T/2))<T*0.6 && b.h<=3) continue;
+      rr(wx2-2,wy2-2,20,18,3,'#3b3347');
+      ctx.fillStyle=night?'#ffd76a':'#cfeeff'; ctx.fillRect(wx2,wy2,16,14);
+      if(night){ ctx.fillStyle='rgba(255,215,106,.22)'; ctx.beginPath(); ctx.arc(wx2+8,wy2+7,14,0,7); ctx.fill(); }
+      else { ctx.fillStyle='rgba(255,255,255,.55)'; ctx.fillRect(wx2+2,wy2+2,5,4); }
+      ctx.strokeStyle='#3b3347'; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(wx2+8,wy2); ctx.lineTo(wx2+8,wy2+14); ctx.stroke();
+      ctx.fillStyle=shade(b.wall,0.72); ctx.fillRect(wx2-3,wy2+15,22,3);       // sill
+    }
+    // roof with sheen + eave
+    ctx.fillStyle=b.roof; ctx.beginPath();
+    ctx.moveTo(x-4,y+T*0.78); ctx.lineTo(x+w/2,y-8); ctx.lineTo(x+w+4,y+T*0.78); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle=COL.outline; ctx.lineWidth=2; ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,.14)'; ctx.beginPath();
+    ctx.moveTo(x+w/2,y-8); ctx.lineTo(x+w*0.16,y+T*0.66); ctx.lineTo(x+w*0.3,y+T*0.66); ctx.closePath(); ctx.fill();
+    ctx.fillStyle=shade(b.roof,0.7); ctx.fillRect(x-4,y+T*0.74,w+8,4);
+    if(b.id==='house'){ rr(x+w*0.7,y+T*0.02,11,17,2,shade(b.roof,0.62)); ctx.strokeStyle=COL.outline; ctx.lineWidth=1.5; ctx.stroke(); }
+    // door (panels + knob)
+    const dx=b.door[0]*T-cam.x, dy=b.door[1]*T-cam.y;
+    rr(dx+5,dy+4,T-10,T-4,4,'#6b4426');
+    ctx.strokeStyle=COL.outline; ctx.lineWidth=2; ctx.stroke();
+    ctx.strokeStyle='rgba(0,0,0,.25)'; ctx.lineWidth=1.2;
+    ctx.strokeRect(dx+8,dy+7,T-16,T*0.4); ctx.strokeRect(dx+8,dy+7+T*0.46,T-16,T*0.36);
+    ctx.fillStyle='#ffd76a'; ctx.beginPath(); ctx.arc(dx+T-10,dy+T/2+2,2.2,0,7); ctx.fill();
+    // striped awning for shops
+    if(b.id==='diner'||b.id==='mall'){
+      const ac=b.id==='diner'?'#e74c3c':'#8e5bd6'; const aw=T+10, ax=dx-5;
+      for(let i=0;i<4;i++){ ctx.fillStyle=i%2?ac:'#fff7ee'; ctx.fillRect(ax+i*aw/4,dy-9,aw/4,10); }
+      ctx.strokeStyle=COL.outline; ctx.lineWidth=1.5; ctx.strokeRect(ax,dy-9,aw,10);
+      ctx.fillStyle='rgba(0,0,0,.12)'; ctx.fillRect(ax,dy+1,aw,3);
+    }
+    // sign plaque
+    rr(x+w/2-16,y+T*0.46,32,19,5,'#fffaf0'); ctx.strokeStyle=COL.outline; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.font='13px sans-serif'; ctx.textAlign='center'; ctx.fillText(b.sign,x+w/2,y+T*0.46+14);
+    // name banner so every place is clearly labeled
+    ctx.font='700 9px -apple-system';
+    const nw=ctx.measureText(b.label).width+12;
+    rr(x+w/2-nw/2, y-22, nw, 14, 7, 'rgba(20,16,38,.82)');
+    ctx.fillStyle='#fff'; ctx.fillText(b.label, x+w/2, y-12);
+    ctx.textAlign='left';
+  }
+}
+
+/* ----- furniture ----- */
+const DECO_ONLY=new Set(['plant','lamp','dresser','nightstand']);
+function drawFurniture(){
+  // iterate furniture objects once (dedupe by origin)
+  const seen=new Set(); const now=performance.now();
+  for(const [k,o] of scene.furnAt){
+    if(seen.has(o)) continue; seen.add(o);
+    const x=o.c*T-cam.x, y=o.r*T-cam.y;
+    if(x>vw+40||y>vh+40||x+T*3<0||y+T*3<0) continue;
+    if(!DECO_ONLY.has(o.t)){
+      // soft pulsing halo marks everything you can use
+      let maxX=0,maxY=0; for(const [dx,dy] of o.meta.fp){ if(dx>maxX)maxX=dx; if(dy>maxY)maxY=dy; }
+      const w=(maxX+1)*T, h=(maxY+1)*T;
+      const pulse=0.16+0.10*Math.sin(now/480+(o.c*3+o.r));
+      rr(x-4,y-4,w+8,h+8,11,'rgba(255,226,150,'+(pulse*0.55).toFixed(3)+')');
+      rr(x-2,y-2,w+4,h+4,9,'rgba(255,232,160,'+pulse.toFixed(3)+')');
+      ctx.strokeStyle='rgba(255,240,190,'+(pulse*0.9).toFixed(3)+')'; ctx.lineWidth=1.5;
+      ctx.strokeRect(x-1.5,y-1.5,w+3,h+3);
+    }
+    drawFurn(o.t, x, y, o);
+  }
+}
+function box(x,y,w,h,r,fill){ rr(x,y,w,h,r,fill); ctx.strokeStyle=COL.outline; ctx.lineWidth=1.6; ctx.stroke(); }
+function drawFurn(t,x,y,o){
+  const busy = action && action.objKey===o.c+','+o.r;
+  switch(t){
+    case 'bed2': {
+      box(x+2,y+2,2*T-4,2*T-4,6,'#7a5230');
+      box(x+5,y+5,2*T-10,2*T-16,5,'#f6f3ee');
+      rr(x+9,y+8,2*T-18,11,4,'#fff');
+      box(x+5,y+T*1.15,2*T-10,T*0.7,5, ['#6f8fd1','#c9a13e','#8e5bd6'][(S.homeLv&&S.homeLv.bed)||0]); break; }
+    case 'kidbed': {
+      box(x+3,y+3,T-6,2*T-8,5,'#d66a8a'); rr(x+6,y+6,T-12,10,3,'#fff');
+      box(x+5,y+T*1.1,T-10,T*0.7,4,'#7fc1e0'); break; }
+    case 'crib': {
+      box(x+3,y+4,T-6,T-8,4,'#caa15e');
+      const baby=(S.kids||[]).find(k=>k.ageDays<3);
+      if(baby){
+        rr(x+7,y+10,T-14,T-18,4,'#ffd1dc');                                 // blanket
+        ctx.fillStyle=S.skin; ctx.beginPath(); ctx.arc(x+T/2,y+11,4.5,0,7); ctx.fill();
+        ctx.strokeStyle=COL.outline; ctx.lineWidth=1; ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x+T/2-2,y+11.5); ctx.lineTo(x+T/2-0.5,y+11.5);
+        ctx.moveTo(x+T/2+0.5,y+11.5); ctx.lineTo(x+T/2+2,y+11.5); ctx.stroke(); // sleepy eyes
+        const zt=(performance.now()/700)%3;
+        ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font='700 8px -apple-system';
+        ctx.fillText('z',x+T-9,y+8-zt*3);
+      } else {
+        for(let i=0;i<4;i++){ ctx.fillStyle='#8a6a3a'; ctx.fillRect(x+6+i*7,y+6,2,T-14); }
+        rr(x+8,y+T-12,T-16,7,3,'#ffd1dc');
+      } break; }
+    case 'toilet': {
+      box(x+9,y+4,T-18,9,2,'#eef0f4');
+      ctx.fillStyle='#fff'; ctx.beginPath(); ctx.ellipse(x+T/2,y+T*0.66,9,10,0,0,7); ctx.fill();
+      ctx.strokeStyle='#c9c9d1'; ctx.lineWidth=2; ctx.beginPath(); ctx.ellipse(x+T/2,y+T*0.66,6,7,0,0,7); ctx.stroke(); break; }
+    case 'shower': {
+      box(x+3,y+3,T-6,T-6,5,'#cfeaf2');
+      ctx.strokeStyle='#7db8c9'; ctx.lineWidth=2.5; ctx.strokeRect(x+4,y+4,T-8,T-8);
+      ctx.fillStyle='#9aa3ad'; ctx.fillRect(x+T/2-1,y+5,2,7); ctx.beginPath(); ctx.arc(x+T/2,y+13,4,0,7); ctx.fill();
+      if(busy){ ctx.strokeStyle='rgba(140,200,255,.7)'; ctx.lineWidth=1; for(let i=0;i<4;i++){ ctx.beginPath(); ctx.moveTo(x+10+i*4,y+14); ctx.lineTo(x+9+i*4,y+T-4); ctx.stroke(); } } break; }
+    case 'tub': {
+      box(x+3,y+8,2*T-6,T-12,9,'#dff0f6'); rr(x+7,y+11,2*T-14,T-20,7,'#9fd8ec');
+      ctx.fillStyle='#fff'; for(const [bx,by] of [[14,15],[24,13],[34,16],[44,14]]){ ctx.beginPath(); ctx.arc(x+bx,y+by,3,0,7); ctx.fill(); } break; }
+    case 'sink': {
+      box(x+5,y+7,T-10,T-12,3,'#9aa3ad'); ctx.fillStyle='#fff'; ctx.beginPath(); ctx.ellipse(x+T/2,y+T*0.55,7,5,0,0,7); ctx.fill();
+      ctx.fillStyle='#6b7480'; ctx.fillRect(x+T/2-1,y+8,2,6); break; }
+    case 'fridge': {
+      box(x+5,y+1,T-10,T-3,4, ['#e6eaef','#aebfd6','#d9c08f'][(S.homeLv&&S.homeLv.kitchen)||0]);
+      ctx.strokeStyle='rgba(0,0,0,.18)'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.moveTo(x+5,y+T*0.42); ctx.lineTo(x+T-5,y+T*0.42); ctx.stroke();
+      ctx.fillStyle='#6b7480'; ctx.fillRect(x+T-11,y+6,2,7); ctx.fillRect(x+T-11,y+T*0.5,2,9); break; }
+    case 'stove': {
+      box(x+3,y+3,T-6,T-6,3,'#5a5a66'); ctx.fillStyle='#2b2b34';
+      for(const [bx,by] of [[10,11],[22,11],[10,22],[22,22]]){ ctx.beginPath(); ctx.arc(x+bx,y+by,4,0,7); ctx.fill(); }
+      if(busy){ ctx.fillStyle='#ff7b3d'; ctx.beginPath(); ctx.arc(x+10,y+11,3,0,7); ctx.fill(); } break; }
+    case 'counter': { box(x+2,y+5,T-4,T-9,3,'#b7a78f'); ctx.fillStyle='#9c8a6e'; ctx.fillRect(x+2,y+5,T-4,5); break; }
+    case 'espresso': { box(x+3,y+6,T-6,T-9,3,'#6b4636'); rr(x+9,y+10,T-18,9,2,'#c0c0cc'); ctx.fillStyle='#3a2a20'; ctx.fillRect(x+T/2-3,y+T-9,6,5); break; }
+    case 'table2': { box(x+3,y+3,2*T-6,2*T-6,5,'#9c6b3f'); ctx.fillStyle='rgba(255,255,255,.12)'; ctx.fillRect(x+6,y+6,2*T-12,5);
+      ctx.font='12px sans-serif'; ctx.fillText('🍽️',x+T-7,y+T+5); break; }
+    case 'tv2': case 'tv3': {
+      const w=(t==='tv3'?3:2)*T; box(x+(w-((t==='tv3')?w-6:w-10))/2+ (t==='tv3'?0:0), 0,0,0,0);
+      const tw=w-12, tx=x+(w-tw)/2;
+      rr(x+w/2-12,y+T-9,24,6,2,'#3a3344');
+      box(tx,y+4,tw,T-12,3,'#15151f');
+      const watching=busy;
+      ctx.fillStyle=watching?'#8fd0ff':'#2c2c40'; ctx.fillRect(tx+3,y+7,tw-6,T-20);
+      if(watching){ ctx.fillStyle='#ffde8a'; ctx.fillRect(tx+tw*0.2,y+10,tw*0.25,T-26); ctx.fillStyle='#ff8fae'; ctx.fillRect(tx+tw*0.55,y+12,tw*0.2,T-28);} break; }
+    case 'sofa2': case 'sofa3': {
+      const w=(t==='sofa3'?3:2)*T; box(x+2,y+3,w-4,T-7,8,'#c0563f');
+      for(let i=0;i<(t==='sofa3'?3:2);i++) rr(x+5+i*T,y+T*0.4,T-9,T*0.45,5,'#d4694f'); break; }
+    case 'computer': {
+      box(x+2,y+9,2*T-4,T-13,3,'#8b5e3c'); rr(x+T*0.5,y+3,T*0.95,15,2,'#22222e');
+      ctx.fillStyle=busy?'#9fd8ff':'#45506b'; ctx.fillRect(x+T*0.5+2,y+5,T*0.95-4,11);
+      if(busy){ ctx.fillStyle='#fff'; ctx.fillRect(x+T*0.6,y+7,3,2); ctx.fillRect(x+T*0.6,y+11,T*0.5,2);} break; }
+    case 'phone': { box(x+5,y+8,T-10,T-12,3,'#7a5230'); rr(x+T/2-5,y+11,10,14,2,'#22222e'); ctx.fillStyle='#7fd8a8'; ctx.fillRect(x+T/2-3,y+13,6,8); break; }
+    case 'bookshelf': case 'bookshelf1': {
+      const w=(t==='bookshelf')?2*T:T; box(x+2,y+2,w-4,T-4,3,'#7a5230');
+      const bc=['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#16a085']; const n=Math.floor((w-12)/7);
+      for(let i=0;i<n;i++){ ctx.fillStyle=bc[i%6]; ctx.fillRect(x+6+i*7,y+7,5,T-16);} break; }
+    case 'toybox': { box(x+4,y+8,T-8,T-12,3,'#e67e22'); ctx.font='13px sans-serif'; ctx.fillText('🧸',x+8,y+T-6); break; }
+    case 'treadmill': { box(x+4,y+2,T-8,2*T-6,4,'#3a3a48'); rr(x+7,y+T*1.2,T-14,T*0.7,3,'#22222e');
+      ctx.fillStyle='#9aa3ad'; ctx.fillRect(x+T/2-1,y+6,2,T*0.9); rr(x+T/2-7,y+4,14,6,2,'#15151f'); break; }
+    case 'plant': {
+      ctx.fillStyle='#b46a4a'; ctx.beginPath(); ctx.moveTo(x+11,y+18); ctx.lineTo(x+T-11,y+18); ctx.lineTo(x+T-14,y+T-4); ctx.lineTo(x+14,y+T-4); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle=COL.outline; ctx.lineWidth=1.4; ctx.stroke();
+      for(const [dx,dy,rad] of [[T/2,9,9],[T/2-8,14,7],[T/2+8,14,7]]){ ctx.fillStyle='#3f9d5a'; ctx.beginPath(); ctx.arc(x+dx,y+dy,rad,0,7); ctx.fill(); } break; }
+    case 'lamp': { ctx.fillStyle='#6b5a3a'; ctx.fillRect(x+T/2-2,y+12,4,T-16); rr(x+T/2-9,y+4,18,12,4,isNight()?'#ffe9a8':'#d8cba8');
+      if(isNight()){ ctx.fillStyle='rgba(255,225,150,.2)'; ctx.beginPath(); ctx.arc(x+T/2,y+12,16,0,7); ctx.fill(); } break; }
+    case 'dresser': { box(x+4,y+6,T-8,T-10,3,'#9c6b3f'); ctx.strokeStyle='rgba(0,0,0,.2)'; ctx.lineWidth=1; ctx.strokeRect(x+4,y+T*0.55,T-8,0.01);
+      ctx.fillStyle='#d9c08f'; ctx.fillRect(x+T/2-3,y+10,6,2); ctx.fillRect(x+T/2-3,y+T*0.6,6,2); break; }
+    case 'nightstand': { box(x+6,y+10,T-12,T-14,3,'#9c6b3f'); ctx.fillStyle='#5c3d24'; ctx.fillRect(x+T/2-1,y+3,2,9); rr(x+T/2-7,y-1,14,7,3,isNight()?'#ffe9a8':'#e8d9a8'); break; }
+    case 'bench': { box(x+3,y+T*0.4,2*T-6,T*0.34,3,'#9c6b3f'); ctx.fillStyle='#7a5230'; ctx.fillRect(x+5,y+T*0.74,4,T*0.2); ctx.fillRect(x+2*T-9,y+T*0.74,4,T*0.2); break; }
+    case 'fountain': {
+      box(x+3,y+3,2*T-6,2*T-6,12,'#9aa6b2'); rr(x+9,y+9,2*T-18,2*T-18,10,COL.water);
+      ctx.fillStyle='#cfeaf6'; ctx.beginPath(); ctx.arc(x+T,y+T,5,0,7); ctx.fill();
+      for(let i=0;i<6;i++){ const a=performance.now()/300+i; ctx.fillStyle='rgba(255,255,255,.6)'; ctx.fillRect(x+T+Math.cos(a)*10, y+T+Math.sin(a)*10-6,2,2); } break; }
+    default: box(x+5,y+5,T-10,T-10,4,'#8a7a9a');
+  }
+}
+
+/* ----- characters ----- */
+function drawPerson(px,py,look,dir,phase,scaleP){
+  const sp=scaleP||1;
+  const skin=look.skin, shirt=look.shirt, hair=look.hair, style=look.style||0;
+  // shadow
+  ctx.fillStyle=COL.shadow; ctx.beginPath(); ctx.ellipse(px,py+1,9*sp,3.5*sp,0,0,7); ctx.fill();
+  const step=Math.sin(phase)*3*sp, walk=Math.abs(Math.sin(phase));
+  // legs
+  ctx.fillStyle='#3a3550';
+  rr(px-6*sp, py-7*sp+step*0.4, 5*sp, (7-step*0.4)*sp, 2, '#3a3550');
+  rr(px+1*sp, py-7*sp-step*0.4, 5*sp, (7+step*0.4)*sp, 2, '#3a3550');
+  ctx.strokeStyle=COL.outline; ctx.lineWidth=1.4;
+  // body
+  const bodyH=15*sp;
+  rr(px-8*sp, py-7*sp-bodyH, 16*sp, bodyH, 6, shirt); ctx.strokeStyle=COL.outline; ctx.lineWidth=1.4; ctx.stroke();
+  // arms hint
+  ctx.fillStyle=shade(shirt,0.85); rr(px-9*sp,py-7*sp-bodyH+3,3*sp,9*sp,2,shade(shirt,0.85)); rr(px+6*sp,py-7*sp-bodyH+3,3*sp,9*sp,2,shade(shirt,0.85));
+  // head
+  const hy=py-7*sp-bodyH-7*sp;
+  rr(px-8*sp, hy-8*sp, 16*sp, 16*sp, 7, skin); ctx.strokeStyle=COL.outline; ctx.lineWidth=1.4; ctx.stroke();
+  // hair
+  ctx.fillStyle=hair;
+  if(dir==='N'){ rr(px-8*sp,hy-8*sp,16*sp,12*sp,6,hair); }
+  else {
+    rr(px-8*sp,hy-8*sp,16*sp,7*sp,6,hair);
+    if(style===1){ rr(px-8*sp,hy-8*sp,4*sp,15*sp,3,hair); rr(px+4*sp,hy-8*sp,4*sp,15*sp,3,hair); } // long
+    if(style===2){ for(let i=0;i<4;i++){ ctx.beginPath(); ctx.moveTo(px-7*sp+i*5*sp,hy-7*sp); ctx.lineTo(px-9*sp+i*5*sp,hy-13*sp); ctx.lineTo(px-4*sp+i*5*sp,hy-8*sp); ctx.closePath(); ctx.fill(); } } // spiky
+  }
+  // eyes
+  if(dir!=='N'){
+    ctx.fillStyle=COL.outline;
+    let ex = dir==='E'?3:dir==='W'?-3:0;
+    if(dir==='S'||dir==='E'||dir==='W'){
+      ctx.beginPath(); ctx.arc(px-3*sp+ex*sp,hy-1*sp,1.6*sp,0,7); ctx.fill();
+      ctx.beginPath(); ctx.arc(px+3*sp+ex*sp,hy-1*sp,1.6*sp,0,7); ctx.fill();
+    }
+  }
+}
+function playerLook(){ return {skin:S.skin, shirt:S.shirt, hair:S.hair, style:S.hairStyle}; }
+
+function drawActors(){
+  // npcs (town)
+  if(scene.type==='town'){
+    for(const n of npcSprites){
+      const x=n.px-cam.x, y=n.py-cam.y;
+      if(x<-30||y<-40||x>vw+30||y>vh+30) continue;
+      drawPerson(x,y,{skin:n.def.skin,shirt:n.def.shirt,hair:n.def.hair,style:n.def.style}, n.dir, n.wt);
+      // name + heart tag
+      const rel=S.rels[n.def.id]?S.rels[n.def.id].rel:0;
+      ctx.font='700 9px -apple-system'; ctx.textAlign='center';
+      ctx.fillStyle='rgba(0,0,0,.4)'; rr(x-16,y-58,32,12,4,'rgba(20,16,38,.75)');
+      ctx.fillStyle=S.partner===n.def.id?'#ff9fc0':'#fff'; ctx.fillText(n.def.name,x,y-49);
+      ctx.textAlign='left';
+    }
+  }
+  // household (partner & kids) at home
+  if(scene.type==='home'){
+    for(const n of homies){
+      if(action&&action.woo&&n.kind==='partner') continue;   // they're… busy
+      const x=n.px-cam.x, y=n.py-cam.y;
+      drawPerson(x,y,n.look,n.dir,n.tpath.length?n.wt:0,n.sc);
+      const ny=n.sc<1?y-40:y-52;
+      rr(x-17,ny-9,34,12,4,'rgba(20,16,38,.75)');
+      ctx.font='700 9px -apple-system'; ctx.textAlign='center';
+      ctx.fillStyle=n.kind==='partner'?'#ff9fc0':'#9fe0b0';
+      ctx.fillText(n.kind==='partner'?n.name+' 💞':n.name, x, ny); ctx.textAlign='left';
+    }
+  }
+  // player
+  drawPlayer();
+}
+function drawPlayer(){
+  if(S.atWork||S.hospital) return;
+  const x=S.px-cam.x, y=S.py-cam.y;
+  if(action&&action.woo){ drawCensor(); return; }
+  const sleeping=action&&action.kind==='sleep';
+  const riding=scene.type==='town'&&S.vehicle&&path.length>0;
+  if(sleeping){
+    ctx.font='800 12px -apple-system'; const zt=(performance.now()/600)%3;
+    drawPerson(x,y,playerLook(),'S',0,0.9);
+    ctx.fillStyle='rgba(255,255,255,.9)'; ctx.fillText('z',x+10,y-44-zt*5); ctx.fillText('Z',x+16,y-54-zt*5);
+  } else if(riding){
+    drawRide(x,y);
+  } else {
+    drawPerson(x,y,playerLook(),facing,path.length?walkT:0);
+  }
+  if(!sleeping) drawPlumbob(x, y-(riding?40:48));
+  drawBubble(x,y);
+}
+function drawPlumbob(x,topY){
+  const m=mood(); const col=m>=70?'#41d97c':m>=40?'#ffc94d':'#ff5d6c';
+  const cy=topY-6+Math.sin(performance.now()/320)*2;
+  ctx.fillStyle=col;
+  ctx.beginPath(); ctx.moveTo(x,cy-7); ctx.lineTo(x+5,cy); ctx.lineTo(x,cy+7); ctx.lineTo(x-5,cy); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,.7)'; ctx.lineWidth=1; ctx.stroke();
+  ctx.globalAlpha=.55; ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.moveTo(x,cy-7); ctx.lineTo(x+5,cy); ctx.lineTo(x,cy); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha=1;
+}
+function headOnly(x,hy){
+  const look=playerLook();
+  rr(x-7,hy-7,14,14,6,look.skin); ctx.strokeStyle=COL.outline; ctx.lineWidth=1.3; ctx.stroke();
+  rr(x-7,hy-7,14,6,5,look.hair);
+  ctx.fillStyle=COL.outline; ctx.beginPath(); ctx.arc(x-2.5,hy+1,1.3,0,7); ctx.arc(x+2.5,hy+1,1.3,0,7); ctx.fill();
+}
+function drawRide(x,y){
+  const horiz=facing==='E'||facing==='W'; const flip=facing==='W'?-1:1;
+  if(S.vehicle==='bike'){
+    ctx.fillStyle='rgba(20,10,30,.22)'; ctx.beginPath(); ctx.ellipse(x,y+2,13,4,0,0,7); ctx.fill();
+    ctx.strokeStyle='#2b2b38'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(x-9*flip,y-3,6,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x+9*flip,y-3,6,0,7); ctx.stroke();
+    const spin=performance.now()/90;
+    ctx.lineWidth=1; ctx.beginPath();
+    ctx.moveTo(x-9*flip-Math.cos(spin)*5,y-3-Math.sin(spin)*5); ctx.lineTo(x-9*flip+Math.cos(spin)*5,y-3+Math.sin(spin)*5); ctx.stroke();
+    ctx.lineWidth=2.5; ctx.beginPath(); ctx.moveTo(x-9*flip,y-3); ctx.lineTo(x,y-11); ctx.lineTo(x+9*flip,y-3); ctx.stroke();
+    drawPerson(x,y-9,playerLook(),facing,walkT*0.4);
+  } else {
+    const limo=S.vehicle==='limo'; const col=limo?'#23232e':'#d6453d';
+    if(horiz){
+      const L=limo?54:36, H=18;
+      ctx.fillStyle='rgba(20,10,30,.25)'; ctx.beginPath(); ctx.ellipse(x,y+4,L/2,5,0,0,7); ctx.fill();
+      rr(x-L/2,y-14,L,H,7,col); ctx.strokeStyle=COL.outline; ctx.lineWidth=2; ctx.stroke();
+      rr(x-L/2+6,y-11,L-12,7,3,limo?'#3d3d52':'#9fd8ff');
+      if(limo){ ctx.strokeStyle='#9fd8ff'; ctx.lineWidth=1;
+        for(let i=1;i<4;i++){ ctx.beginPath(); ctx.moveTo(x-L/2+6+i*(L-12)/4,y-11); ctx.lineTo(x-L/2+6+i*(L-12)/4,y-4); ctx.stroke(); } }
+      ctx.fillStyle='#1d1626'; ctx.beginPath(); ctx.arc(x-L/2+9,y+4,4.5,0,7); ctx.arc(x+L/2-9,y+4,4.5,0,7); ctx.fill();
+      ctx.fillStyle='#555'; ctx.beginPath(); ctx.arc(x-L/2+9,y+4,2,0,7); ctx.arc(x+L/2-9,y+4,2,0,7); ctx.fill();
+      ctx.fillStyle='#ffe9a8'; ctx.fillRect(x+flip*(L/2-2)-2,y-10,4,4);
+      headOnly(x-(limo?L*0.22:0)*flip, y-17);
+    } else {
+      const W=20, LH=limo?48:34;
+      ctx.fillStyle='rgba(20,10,30,.25)'; ctx.beginPath(); ctx.ellipse(x,y+3,12,5,0,0,7); ctx.fill();
+      rr(x-W/2,y-LH+6,W,LH,7,col); ctx.strokeStyle=COL.outline; ctx.lineWidth=2; ctx.stroke();
+      rr(x-W/2+4,y-LH+10,W-8,9,3,limo?'#3d3d52':'#9fd8ff');
+      ctx.fillStyle='#1d1626';
+      ctx.fillRect(x-W/2-2,y-LH+12,3,8); ctx.fillRect(x+W/2-1,y-LH+12,3,8);
+      ctx.fillRect(x-W/2-2,y-4,3,8); ctx.fillRect(x+W/2-1,y-4,3,8);
+      headOnly(x, y-LH/2);
+    }
+  }
+}
+function drawBubble(x,y){
+  const topY=Math.max(y-46,28); const bx=clamp(x,28,vw-28);
+  if(action&&action.icon){
+    rr(bx-22,topY-6,44,30,9,'rgba(255,255,255,.96)');
+    ctx.font='17px sans-serif'; ctx.textAlign='center'; ctx.fillText(action.icon,bx,topY+13);
+    if(action.total){ const pct=action.kind==='sleep'? S.needs.energy/100 : 1-action.left/action.total;
+      rr(bx-15,topY+16,30,3.5,2,'#e3e0ee'); rr(bx-15,topY+16,30*clamp(pct,0.02,1),3.5,2,'#5ee07a'); }
+    ctx.textAlign='left';
+  }
+}
+
+/* ----- day / night ----- */
+function isNight(){ const h=Math.floor(S.minutes/60)%24; return h>=21||h<6; }
+function nightAlpha(){ const h=(S.minutes/60)%24;
+  if(h>=22||h<5) return .42; if(h>=5&&h<7.5) return .42*(1-(h-5)/2.5); if(h>=19.5&&h<22) return .42*((h-19.5)/2.5); return 0; }
+
+function draw(){
+  ctx.clearRect(0,0,vw,vh);
+  if(!S||!scene){ return; }
+  drawTerrain();
+  if(scene.type==='town') drawBuildings();
+  drawFurniture();
+  drawActors();
+  drawParts();
+  const na=nightAlpha(); if(na>0){ ctx.fillStyle='rgba(16,18,52,'+na+')'; ctx.fillRect(0,0,vw,vh); }
+  if(transition>0){ ctx.fillStyle='rgba(8,6,16,'+transition+')'; ctx.fillRect(0,0,vw,vh); }
+}
+
+/* ============================================================ */
+/*                        SIMULATION                            */
+/* ============================================================ */
+function mood(){ const n=S.needs; return (n.hunger+n.energy+n.hygiene+n.bladder+n.fun+n.social)/6; }
+function moodEmoji(){ const m=mood(); return m>=78?'😄':m>=58?'🙂':m>=38?'😐':m>=20?'☹️':'😫'; }
+
+function addXP(n){
+  if(S.career==='artist') n=Math.round(n*1.25);
+  S.xp+=n;
+  let need=80+S.level*40;
+  while(S.xp>=need){ S.xp-=need; S.level++; SFX.level();
+    burst(S.px-cam.x,S.py-cam.y-30,'confetti'); toast('⭐ Level '+S.level+'!');
+    need=80+S.level*40; }
+}
+function addCoins(n){ S.coins+=n; const c=el('coins'); c.classList.add('bump'); setTimeout(()=>c.classList.remove('bump'),160); }
+function spend(n){ if(S.coins<n){ toast("Not enough coins 💰"); SFX.err(); return false; } S.coins-=n; return true; }
+
+function qprogress(ev,amt){
+  amt=amt||1; let any=false;
+  for(const q of S.quests){ if(q.claimed||q.done) continue; const def=QUEST_POOL.find(d=>d.id===q.id); if(def.ev!==ev) continue;
+    q.prog=Math.min(def.n,q.prog+amt); if(q.prog>=def.n){ q.done=true; any=true; SFX.good(); toast('✅ Quest ready: '+def.txt); } }
+  if(any) refreshLifeDot();
+}
+
+function tick(dt){
+  if(!S||paused) return;
+  const sleeping=action&&action.kind==='sleep';
+  const mult=(S.atWork||S.hospital)?6:(sleeping?5:1);
+  const dtMin=dt*2*speed*mult;
+  S.minutes+=dtMin;
+
+  if(S.atWork){ S.atWork.left-=dtMin; if(S.atWork.left<=0) endWork(); updateAwayChip(); return; }
+  if(S.hospital){ S.hospital.left-=dtMin; if(S.hospital.left<=0) leaveHospital(); updateAwayChip(); return; }
+
+  const n=S.needs;
+  const decorLv=S.homeLv?S.homeLv.decor:0;
+  for(const d of NEEDS){
+    let rate=d.decay;
+    if(sleeping){ if(d.k==='energy') continue; rate*=(d.k==='bladder'?0.55:d.k==='hunger'?0.5:0.18); }
+    if(S.career==='doctor') rate*=0.85;                                  // career perks
+    if(S.career==='artist'&&d.k==='fun') rate*=0.7;
+    if(S.career==='trainer'&&d.k==='energy') rate*=0.85;
+    if(S.outfit==='hoodie'&&d.k==='fun') rate*=0.9;                      // outfit perk
+    if(decorLv&&(d.k==='fun'||d.k==='social')) rate*=(decorLv>=2?0.65:0.75); // decor tier
+    if(S.partner&&d.k==='social') rate*=0.7;
+    n[d.k]=clamp(n[d.k]-rate/60*dtMin,0,100);
+  }
+
+  if(action){
+    if(action.kind==='sleep'){
+      const rate=[15,22,30][S.homeLv?S.homeLv.bed:0]||15;
+      n.energy=Math.min(100,n.energy+rate/60*dtMin);
+      if(action.untilMorning){ if(S.minutes>=action.wakeAt||n.energy>=99){ wakeUp(); } }
+      else if(n.energy>=99){ wakeUp(); }
+    } else if(action.fx){
+      action.left-=dtMin;
+      if(action.left<=0){ applyFx(action.fx); finishAction(); }
+    }
+  }
+
+  // warnings
+  for(const d of NEEDS){
+    if(n[d.k]<12&&!S.warned[d.k]){ S.warned[d.k]=true; toast('⚠️ '+S.name+"'s "+d.lbl+' is low '+d.ic); }
+    if(n[d.k]>28) S.warned[d.k]=false;
+  }
+  // total collapse → hospital (energy gone, or 3+ needs bottomed out)
+  if(!S.hospital&&!S.atWork){
+    const zeros=NEEDS.filter(d=>n[d.k]<=1).length;
+    if(n.energy<=0.5||zeros>=3) hospitalize();
+  }
+  // kids age & need attention
+  if(S.kids){ for(const k of S.kids){
+    k.t=(k.t||0)+dtMin;
+    k.happy=clamp((k.happy||60)-10*dtMin/1440,0,100);
+    if(k.t>=1440){ k.t-=1440; k.ageDays++;
+      if(k.ageDays===3){ toast('🎂 '+k.name+' grew into a child!'); SFX.level(); buildHomies(); }
+      else if(k.ageDays===8){ toast('🎂 '+k.name+' is a teen now!'); SFX.level(); buildHomies(); }
+      if(k.happy<35) toast('🥺 '+k.name+' misses you — play with them!');
+    }
+  } }
+}
+function applyFx(fx){ for(const k in fx){ if(k in S.needs) S.needs[k]=clamp(S.needs[k]+fx[k],0,100); } }
+function finishAction(){ if(action&&action.returnPx){ S.px=action.returnPx[0]; S.py=action.returnPx[1]; }
+  if(action&&action.done) action.done(); action=null; }
+function wakeUp(){ finishAction(); SFX.good(); qprogress('sleep'); toast('☀️ '+S.name+' woke up refreshed'); addXP(10); }
+
+function moveSim(dt){
+  if(!path.length){ if(pending){ const fn=pending; pending=null; fn(); } return; }
+  const baseSp=T*3.6*(S.outfit==='sporty'?1.15:1);
+  const vmult=(scene.type==='town'&&S.vehicle)?({bike:1.6,car:2.2,limo:2.6}[S.vehicle]||1):1;
+  const sp=baseSp*(speed>1?1.5:1)*vmult;
+  let dist=sp*dt;
+  while(dist>0&&path.length){
+    const tnode=path[0]; const dx=tnode.x-S.px, dy=tnode.y-S.py, d=Math.hypot(dx,dy);
+    if(Math.abs(dx)>Math.abs(dy)) facing=dx>0?'E':'W'; else facing=dy>0?'S':'N';
+    if(d<=dist){ S.px=tnode.x; S.py=tnode.y; path.shift(); dist-=d; checkTrigger(); }
+    else { S.px+=dx/d*dist; S.py+=dy/d*dist; dist=0; }
+  }
+  walkT+=dt*11;
+  const now=performance.now(); if(path.length&&now-lastFootEvt>220){ lastFootEvt=now; blip(180,0.03,'square',0.015); }
+}
+function checkTrigger(){
+  const [c,r]=curTile(); const door=scene.doors.get(c+','+r);
+  if(door==='town'){ gotoScene('town', TOWN_SPAWN); }
+  else if(door==='home'){ gotoScene('home', homeDef().spawn); }
+}
+
+/* ----- NPC town AI ----- */
+function tickNPCs(dt){
+  if(scene.type!=='town') return;
+  for(const n of npcSprites){
+    if(n.tpath.length){
+      let dist=T*1.3*dt;
+      while(dist>0&&n.tpath.length){ const t=n.tpath[0]; const dx=t.x-n.px,dy=t.y-n.py,d=Math.hypot(dx,dy);
+        if(Math.abs(dx)>Math.abs(dy)) n.dir=dx>0?'E':'W'; else n.dir=dy>0?'S':'N';
+        if(d<=dist){ n.px=t.x; n.py=t.y; n.tpath.shift(); dist-=d; } else { n.px+=dx/d*dist; n.py+=dy/d*dist; dist=0; } }
+      n.wt+=dt*9;
+    } else { n.cool-=dt;
+      if(n.cool<=0){ n.cool=4+Math.random()*5;
+        const a=n.def.anchor; const tc=clamp(a[0]+Math.round((Math.random()-.5)*3),1,scene.cols-2), tr=clamp(a[1]+Math.round((Math.random()-.5)*3),1,scene.rows-2);
+        const p=findPath(Math.floor(n.px/T),Math.floor(n.py/T),tc,tr); if(p&&p.length) n.tpath=p;
+      } }
+  }
+}
+
+/* ============================================================ */
+/*                  INTERACTIONS (sheets)                       */
+/* ============================================================ */
+const sheetWrap=el('sheetWrap'), sheet=el('sheet');
+el('sheetBack').addEventListener('click',closeSheet);
+function openSheet(html){ sheet.innerHTML=html; sheetWrap.classList.add('show'); paused=true; }
+function closeSheet(){ sheetWrap.classList.remove('show'); sheet.innerHTML=''; paused=false; }
+function sheetHead(icon,title,sub){ return `<div class="shead"><div class="bigico">${icon}</div><div><h3>${title}</h3><p>${sub||''}</p></div></div>`; }
+function item(icon,title,sub,right,attrs){ return `<button class="sheetitem" ${attrs||''}><span class="si">${icon}</span><span class="st"><b>${title}</b>${sub?`<span>${sub}</span>`:''}</span>${right?`<span class="cost ${right.owned?'owned':''}">${right.txt}</span>`:''}</button>`; }
+
+let sheetActions={};   // id -> fn
+function bindSheet(){ sheet.querySelectorAll('[data-a]').forEach(b=>{ b.onclick=()=>{ const f=sheetActions[b.dataset.a]; if(f) f(b); }; }); }
+
+function objSpot(o){
+  // first walkable tile adjacent to ANY tile of the object's footprint (below preferred)
+  const tiles=o.meta.fp.map(([dx,dy])=>[o.c+dx,o.r+dy]);
+  const own=new Set(tiles.map(t=>t[0]+','+t[1]));
+  for(const [dc,dr] of [[0,1],[1,0],[-1,0],[0,-1]]){
+    for(const [tc,tr] of tiles){
+      const nc=tc+dc, nr=tr+dr;
+      if(own.has(nc+','+nr)) continue;
+      if(walkable(nc,nr)) return [nc,nr];
+    }
+  }
+  return null;
+}
+function goToObj(o,then){
+  const sp=objSpot(o);
+  if(!sp){ toast("Can't get to it 🚧"); SFX.err(); return false; }
+  return goTo(sp[0],sp[1],then);
+}
+function tapObject(o){
+  SFX.tap();
+  const key=o.c+','+o.r;
+  goToObj(o, ()=>showObjectSheet(o,key));
+}
+function startTimed(o,key,kind,icon,label,fx,dur,onDone){
+  // move sim onto an interaction pose (stand at adj tile already)
+  action={objKey:key, kind, icon, label, fx, total:dur, left:dur, returnPx:null, done:onDone};
+  closeSheet(); toast(label+'…');
+}
+function showObjectSheet(o,key){
+  const t=o.t, m=o.meta;
+  sheetActions={};
+  let body=sheetHead(m.icon,m.name,m.desc);
+  const add=(icon,title,sub,id,fn,right,dis)=>{ body+=item(icon,title,sub,right,`data-a="${id}"${dis?' disabled':''}`); sheetActions[id]=fn; };
+
+  if(t==='fridge'||t==='stove'||t==='counter'){
+    body+=`<p style="font-size:11px;color:#bdb6d6;margin:6px 2px">Pick a meal — pricier food fills more 🍗</p>`;
+    FOODS_HOME.forEach((f,i)=>{ add(f.icon,f.name,(f.cost?f.cost+'💰 · ':'')+'+'+f.hunger+' hunger',
+      'food'+i,()=>eatFood(o,key,f,false),{txt:f.cost?f.cost+'💰':'free'}); });
+  } else if(t==='toilet'){ add('🚽','Use toilet','+bladder','x',()=>doAct(o,key,'🚽','Relieved',{bladder:95},10,()=>qprogress('clean',0))); }
+  else if(t==='shower'){ const bl=S.homeLv?S.homeLv.bath:0;
+    add('🚿','Take a shower','+hygiene'+(bl?' +fun (spa!)':''),'x',()=>doAct(o,key,'🚿','Showering',{hygiene:80+bl*10,fun:3+bl*7},22,()=>qprogress('clean'))); }
+  else if(t==='tub'){ const bl=S.homeLv?S.homeLv.bath:0;
+    add('🛁','Bubble bath','+hygiene +fun (slow & lovely)','x',()=>doAct(o,key,'🛁','Soaking',{hygiene:92+bl*4,fun:18+bl*8,energy:6},40,()=>qprogress('clean'))); }
+  else if(t==='sink'){ add('🫧','Wash up','quick +hygiene','x',()=>doAct(o,key,'🫧','Washing',{hygiene:30},6,()=>qprogress('clean'))); }
+  else if(t==='bed2'){
+    add('😴','Sleep till morning','Full energy, new day','s',()=>sleep(o,key,true));
+    add('💤','Quick nap','+35 energy','n',()=>sleep(o,key,false));
+    if(S.partner){
+      add('💞','Cuddle','+fun +social','c',()=>doAct(o,key,'💞','Cuddling',{fun:18,social:22},18,()=>{ rel(S.partner,4); }));
+      add('🌹','WooHoo','Adults only 🫣 · +fun +social +❤','w2',()=>startWoohoo(o,key));
+    }
+  }
+  else if(t==='kidbed'||t==='crib'){
+    if(S.kids&&S.kids.length){ add('🧸','Play with kid','+fun, makes them happy','p',()=>kidPlay(o,key)); add('📖','Read a bedtime story','+social +fun','r',()=>doAct(o,key,'📖','Story time',{fun:14,social:16},18,()=>{ qprogress('kidplay'); })); }
+    else add('🛒','No child yet','Start a family first (👪)','x',()=>{ closeSheet(); openFamily(); });
+  }
+  else if(t==='tv2'||t==='tv3'){
+    const eff=Math.min(2,(t==='tv3'?1:0)+(S.homeLv?S.homeLv.tv:0));
+    const tvFun=[28,44,62][eff], tvDur=[60,50,45][eff];
+    add('📺','Watch TV','+'+tvFun+' fun','w',()=>doAct(o,key,'📺','Watching TV',{fun:tvFun,energy:6},tvDur,()=>{ qprogress('tv'); }));
+    if(S.partner||(S.kids&&S.kids.length)) add('🍿','Family movie night','+fun +social for all','f',()=>doAct(o,key,'🍿','Movie night',{fun:50+eff*6,social:30,energy:4},55,()=>{ if(S.partner) rel(S.partner,3); qprogress('tv'); }));
+  }
+  else if(t==='sofa2'||t==='sofa3'){ add('🛋️','Relax','+fun +a little energy','x',()=>doAct(o,key,'🛋️','Relaxing',{fun:20,energy:10},30)); }
+  else if(t==='computer'){
+    add('🌐','Browse the web','+fun','b',()=>doAct(o,key,'💻','Browsing',{fun:24,social:10},35));
+    add('💼','Freelance gig','Earn 40–90💰 (costs energy & time)','g',()=>gig(o,key));
+    add('📹','Video call a friend','+social','v',()=>doAct(o,key,'📹','Video call',{social:40,fun:8},25,()=>qprogress('social')));
+  }
+  else if(t==='phone'){ add('📞','Call a friend','+social','x',()=>doAct(o,key,'📞','Calling',{social:48},22,()=>qprogress('social'))); }
+  else if(t==='bookshelf'||t==='bookshelf1'){ add('📖','Read a book','+fun, calm','x',()=>doAct(o,key,'📖','Reading',{fun:22,energy:-2},40)); }
+  else if(t==='toybox'){ add('🪀','Play around','+fun','x',()=>doAct(o,key,'🪀','Playing',{fun:26},20, ()=>{ if(S.kids&&S.kids.length) qprogress('kidplay'); })); }
+  else if(t==='treadmill'){ const tr=S.career==='trainer';
+    add('🏃','Work out',(tr?'2× gains (Trainer!) · ':'')+'+fun, fitness','x',()=>doAct(o,key,'🏃','Running',{fun:tr?36:18,energy:-14,hygiene:-12},30,()=>{ qprogress('fit'); addXP(tr?16:8); })); }
+  else if(t==='espresso'){ const ba=S.career==='barista';
+    add('☕','Pull a shot','5💰 · +'+(ba?60:30)+' energy'+(ba?' (Barista!)':''),'x',()=>{ if(!spend(5)) return; doAct(o,key,'☕','Espresso',{energy:ba?60:30,fun:4},8,()=>{ qprogress('coffee'); }); }); }
+  else if(t==='table2'){ add('🍽️','Sit & eat','+social if family is home','x',()=>doAct(o,key,'🍽️','Dining',{social:20,fun:8},20,()=>{ if(S.partner) rel(S.partner,2); })); }
+  else if(t==='fountain'){ add('🪙','Make a wish','Toss 1💰 for luck','x',()=>{ if(!spend(1)) return; closeSheet(); burst(S.px-cam.x,S.py-cam.y-20,'spark'); SFX.coin(); toast('🪙 You made a wish ✨'); S.needs.fun=clamp(S.needs.fun+10,0,100); qprogress('fountain'); addXP(8); }); }
+  else { add(m.icon,'Inspect',m.desc,'x',()=>{ closeSheet(); S.needs.fun=clamp(S.needs.fun+4,0,100); toast(m.icon+' '+m.desc); }); }
+
+  add('✖️','Close','','close',closeSheet);
+  openSheet(body); bindSheet();
+}
+function doAct(o,key,icon,label,fx,dur,onDone){
+  // ensure standing adjacent (we already pathed there)
+  action={objKey:key, kind:'timed', icon, label, fx, total:dur, left:dur, done:()=>{ burstNeeds(fx); if(onDone) onDone(); }};
+  closeSheet(); SFX.tap();
+}
+function burstNeeds(fx){ let txt=[]; for(const k in fx){ if(fx[k]>0) txt.push('+'+fx[k]+' '+(NEEDS.find(n=>n.k===k)||{ic:''}).ic); }
+  if(txt.length) burst(S.px-cam.x,S.py-cam.y-34,'spark',txt[0]); }
+function eatFood(o,key,f,diner){
+  const kLv=S.homeLv?S.homeLv.kitchen:0;
+  let cost=f.cost;
+  if(!diner&&kLv>=2) cost=Math.round(cost*0.8);          // gourmet kitchen discount
+  if(cost&&!spend(cost)) return;
+  const fx={hunger:f.hunger, fun:f.fun||0}; if(f.energy) fx.energy=f.energy; if(f.social) fx.social=f.social;
+  if(!diner){
+    const mult=1+(kLv>=2?0.5:kLv>=1?0.25:0)+(S.career==='chef'?0.3:0);   // kitchen tier + chef career
+    if(mult>1){ fx.hunger=Math.min(100,Math.round(fx.hunger*mult)); fx.fun+=4; }
+  }
+  if(S.career==='barista'&&fx.energy) fx.energy*=2;       // barista: coffee hits different
+  action={objKey:key, kind:'timed', icon:f.icon, label:'Eating '+f.name, fx, total:f.dur, left:f.dur,
+    done:()=>{ burst(S.px-cam.x,S.py-cam.y-34,'spark','+'+fx.hunger+'🍗'); SFX.eat(); S.stats.eat=(S.stats.eat||0)+1; qprogress('eat'); addXP(5); } };
+  closeSheet();
+}
+function sleep(o,key,untilMorning){
+  const wakeAt=(Math.floor(S.minutes/1440)+1)*1440+7*60;
+  action={objKey:key, kind:'sleep', icon:'😴', untilMorning, wakeAt, total:1, left:1};
+  if(!untilMorning){ action.kind='timed'; action.icon='💤'; action.fx={energy:35}; action.total=20; action.left=20; action.done=()=>burstNeeds({energy:35}); }
+  closeSheet();
+}
+function gig(o,key){
+  if(S.needs.energy<15){ toast('Too tired for a gig ⚡'); SFX.err(); return; }
+  action={objKey:key, kind:'timed', icon:'💻', label:'Freelancing', fx:{energy:-18,fun:-4,social:-3}, total:45, left:45,
+    done:()=>{ let pay=40+Math.floor(Math.random()*50)+S.level*8; if(S.career==='techie') pay*=2;
+      addCoins(pay); burst(S.px-cam.x,S.py-cam.y-30,'coin','+'+pay+'💰'); SFX.coin(); qprogress('gig'); addXP(20); toast('💻 Gig done! +'+pay+'💰'+(S.career==='techie'?' (pro rate 💻)':'')); } };
+  closeSheet();
+}
+function kidPlay(o,key){
+  action={objKey:key, kind:'timed', icon:'🧸', label:'Playing with kid', fx:{fun:24,social:18,energy:-6}, total:22, left:22,
+    done:()=>{ burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); const k=S.kids[0]; if(k) k.happy=clamp((k.happy||50)+20,0,100); qprogress('kidplay'); addXP(15); toast('🧸 '+(S.kids[0]?S.kids[0].name:'Your kid')+' had a blast!'); } };
+  closeSheet();
+}
+function findFurn(t){ for(const [k,o] of scene.furnAt){ if(o.t===t) return o; } return null; }
+function startWoohoo(){
+  if(!S.partner) return;
+  if(scene.type!=='home'){ toast('Take it home, lovebirds 🫣'); SFX.err(); closeSheet(); return; }
+  const bed=findFurn('bed2'); if(!bed){ toast('You need a bed for that 🛏️'); SFX.err(); return; }
+  closeSheet();
+  goToObj(bed,()=>{
+    action={kind:'timed', woo:true, icon:'🌹', label:'WooHoo',
+      fx:{fun:35,social:30,energy:-10}, total:25, left:25,
+      bedX:bed.c*T, bedY:bed.r*T, returnPx:[S.px,S.py],
+      done:()=>{ rel(S.partner,10);
+        burst(S.px-cam.x,S.py-cam.y-30,'heart'); burst(S.px-cam.x,S.py-cam.y-44,'confetti'); SFX.heart();
+        qprogress('woohoo'); addXP(20);
+        const lines=['🌹 That was magical…','😏 WooHoo!','💞 Sparks flew!','🫣 Well then!'];
+        toast(lines[Math.floor(Math.random()*lines.length)]); } };
+    S.px=bed.c*T+T; S.py=bed.r*T+T;   // both vanish behind the censor mosaic
+  });
+}
+function drawCensor(){
+  const bx=action.bedX-cam.x, by=action.bedY-cam.y;
+  const shake=Math.sin(performance.now()/70)*1.4;
+  const cell=11, n=Math.ceil(2*T/cell);
+  const tp=Math.floor(performance.now()/130);
+  const pal=['#f6b6c9','#e8a3b8','#d98aa6','#f3c6d4','#caa0b8'];
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++){
+    const hh=hash(i*7+tp, j*13+tp*3);
+    ctx.fillStyle=pal[Math.floor(hh*pal.length)%pal.length];
+    ctx.fillRect(bx+shake+i*cell, by+j*cell, cell-1, cell-1);
+  }
+  ctx.strokeStyle=COL.outline; ctx.lineWidth=2; ctx.strokeRect(bx+shake,by,2*T,2*T);
+  if(Math.random()<0.07) parts.push({x:bx+T+(Math.random()-.5)*34,y:by+4,vx:(Math.random()-.5)*16,vy:-34,life:1.2,t:'heart'});
+  rr(bx+T-36,by-26,72,16,6,'rgba(255,255,255,.95)');
+  ctx.fillStyle='#3b3347'; ctx.font='700 9px -apple-system'; ctx.textAlign='center';
+  ctx.fillText('🚪 Do not disturb',bx+T,by-15); ctx.textAlign='left';
+  const pct=1-action.left/action.total;
+  rr(bx+4,by+2*T+5,2*T-8,4,2,'rgba(0,0,0,.35)');
+  rr(bx+4,by+2*T+5,(2*T-8)*Math.max(.03,pct),4,2,'#ff7fa3');
+}
+function showKidSheet(idx){
+  const k=S.kids[idx]; if(!k) return;
+  sheetActions={};
+  const stage=k.ageDays>=8?'Teen':'Child';
+  let body=sheetHead(k.ageDays>=8?'🧑':'🧒', k.name, stage+' · Happiness '+Math.round(k.happy||50)+'% · age '+k.ageDays+' days');
+  const add=(icon,title,sub,id,fn)=>{ body+=item(icon,title,sub,null,`data-a="${id}"`); sheetActions[id]=fn; };
+  add('🥏','Play together','+fun for you both','p',()=>{
+    action={kind:'timed',icon:'🥏',label:'Playing with '+k.name,fx:{fun:22,social:16,energy:-5},total:20,left:20,
+      done:()=>{ k.happy=clamp((k.happy||50)+18,0,100); burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); qprogress('kidplay'); addXP(14); toast('🥏 '+k.name+' loved it!'); }};
+    closeSheet(); });
+  add('✏️','Help with homework','+XP, +happiness','h',()=>{
+    action={kind:'timed',icon:'✏️',label:'Homework with '+k.name,fx:{fun:4,social:10},total:18,left:18,
+      done:()=>{ k.happy=clamp((k.happy||50)+8,0,100); addXP(22); SFX.good(); burst(S.px-cam.x,S.py-cam.y-30,'spark','💡'); toast('✏️ '+k.name+' aced it! +XP'); }};
+    closeSheet(); });
+  add('🙌','High five','instant joy','f',()=>{
+    k.happy=clamp((k.happy||50)+6,0,100); burst(S.px-cam.x,S.py-cam.y-28,'spark','🙌'); SFX.good(); addXP(4); closeSheet(); });
+  add('✖️','Close','','x',closeSheet);
+  openSheet(body); bindSheet();
+}
+
+/* ----- NPC interaction ----- */
+function rel(id,amt){
+  if(!S.rels[id]) S.rels[id]={rel:0, met:true, romance:false};
+  const before=S.rels[id].rel;
+  S.rels[id].rel=clamp(S.rels[id].rel+amt,0,100);
+  if(before<40&&S.rels[id].rel>=40) qprogress('rel40');
+}
+function tapNPC(n){
+  SFX.tap();
+  n.tpath=[]; n.cool=6;   // make them wait while you walk over
+  goNextTo(Math.floor(n.px/T),Math.floor(n.py/T), ()=>showNPCSheet(n.def.id));
+}
+function showNPCSheet(id){
+  const def=NPCS.find(n=>n.id===id); if(!S.rels[id]) S.rels[id]={rel:0,met:true,romance:false};
+  const R=S.rels[id]; sheetActions={};
+  const isPartner=S.partner===id;
+  const status=isPartner?'💞 Partner':R.rel>=75?'❤️ In love':R.rel>=50?'😊 Close friend':R.rel>=25?'🙂 Friend':'🤝 Acquaintance';
+  let body=sheetHead('🧑','Talk to '+def.name, def.bio+' · '+status+' ('+Math.round(R.rel)+'❤)');
+  const add=(icon,title,sub,fn,dis)=>{ const idk='n'+Object.keys(sheetActions).length; body+=item(icon,title,sub,null,`data-a="${idk}"${dis?' disabled':''}`); sheetActions[idk]=fn; };
+
+  add('💬','Chat','+social, +rel',()=>npcSocial(id,'chat',{social:18},6));
+  add('😄','Tell a joke','+fun, +rel',()=>npcSocial(id,'joke',{fun:14,social:10},5));
+  add('🙌','Compliment','+rel',()=>npcSocial(id,'compliment',{social:8},5));
+  const hasGift=Object.values(S.gifts||{}).some(v=>v>0);
+  add('🎁','Give a gift', hasGift?'Use a gift from your bag':'Buy gifts at the Mall 🛍️', ()=>giftPicker(id), !hasGift);
+  if(!isPartner){
+    if(!S.partner){   // romance only while single — keep it wholesome
+      add('💘','Flirt', R.rel>=30?'Build romance':'Get closer first (30❤)', ()=>npcSocial(id,'flirt',{social:12,fun:8},6,true), R.rel<30);
+      add('🌹','Ask on a date', R.rel>=50?'+lots of rel':'Need 50❤', ()=>npcDate(id), R.rel<50);
+      const hasRing=(S.gifts&&S.gifts.ring>0);
+      add('💍','Propose', R.rel>=75?(hasRing?'Become partners!':'Buy a 💍 ring first'):'Need 75❤ & a ring', ()=>propose(id), !(R.rel>=75&&hasRing));
+    }
+  } else {
+    add('🤗','Hug','+social +rel',()=>npcSocial(id,'hug',{social:20,fun:6},5,true));
+    add('🌹','WooHoo', scene.type==='home'?'Adults only 🫣 · +fun +social +❤':'Only at home 🏠', ()=>startWoohoo(), scene.type!=='home');
+    add('🍼','Try for a baby', (S.kids&&S.kids.length>=4)?'House is full!':'Start/grow your family', ()=>tryBaby(id), S.kids&&S.kids.length>=4);
+    add('💔','Break up','End the relationship',()=>breakup(id));
+  }
+  add('✖️','Close','',closeSheet);
+  openSheet(body); bindSheet();
+}
+function npcSocial(id,kind,fx,dur,romantic){
+  if(S.needs.energy<5){ toast('Too tired to socialize ⚡'); SFX.err(); return; }
+  const def=NPCS.find(n=>n.id===id);
+  action={kind:'timed', icon:romantic?'💘':'💬', label:'With '+def.name, fx, total:dur, left:dur,
+    done:()=>{ const amt=(romantic?9:6) + (kind==='compliment'?2:0) + (S.outfit==='dress'?2:0); rel(id, amt);
+      if(romantic){ S.rels[id].romance=true; burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); }
+      else { burst(S.px-cam.x,S.py-cam.y-30,'spark', CHAT_LINES[Math.floor(Math.random()*CHAT_LINES.length)].split(' ').pop()); SFX.good(); }
+      S.stats.social=(S.stats.social||0)+1; qprogress('social'); addXP(8);
+      toast(def.name+': you '+CHAT_LINES[Math.floor(Math.random()*CHAT_LINES.length)]); } };
+  closeSheet();
+}
+function npcDate(id){
+  const def=NPCS.find(n=>n.id===id);
+  action={kind:'timed', icon:'🌹', label:'On a date with '+def.name, fx:{fun:30,social:35,energy:-6}, total:40, left:40,
+    done:()=>{ rel(id,18); S.rels[id].romance=true; burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); addXP(20); toast('🌹 Lovely date with '+def.name+'!'); } };
+  closeSheet();
+}
+function giftPicker(id){
+  sheetActions={}; let body=sheetHead('🎁','Give a gift','Tap one from your bag');
+  let any=false;
+  GIFTS.forEach(g=>{ const have=(S.gifts&&S.gifts[g.id])||0; if(have<=0) return; any=true;
+    const idk='g'+g.id; body+=item(g.icon,g.name,'x'+have+(g.rel?' · +'+g.rel+'❤':''),null,`data-a="${idk}"`);
+    sheetActions[idk]=()=>{ S.gifts[g.id]--; if(g.id==='ring'){ closeSheet(); toast('Use 💍 via Propose 💍'); return; }
+      rel(id,g.rel); burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); qprogress('gift'); addXP(12);
+      toast(NPCS.find(n=>n.id===id).name+' loved the '+g.name+'! +'+g.rel+'❤'); closeSheet(); }; });
+  if(!any) body+=`<p style="color:#bdb6d6;font-size:12px;margin-top:8px">Your gift bag is empty. Buy some at 🛍️ Maple Mall.</p>`;
+  body+=item('↩️','Back','','',`data-a="back"`); sheetActions.back=()=>showNPCSheet(id);
+  openSheet(body); bindSheet();
+}
+function propose(id){
+  if(!(S.gifts&&S.gifts.ring>0)){ toast('You need a 💍 ring (Mall)'); SFX.err(); return; }
+  S.gifts.ring--; S.partner=id; S.rels[id].rel=Math.max(S.rels[id].rel,80); S.rels[id].romance=true;
+  npcSprites=npcSprites.filter(sp=>sp.def.id!==id);   // they move in with you
+  buildHomies();
+  burst(S.px-cam.x,S.py-cam.y-30,'confetti'); SFX.level(); qprogress('partner');
+  addXP(60); toast('💍 '+NPCS.find(n=>n.id===id).name+' said YES! They moved in 🏡💞'); closeSheet(); refreshLifeDot(); save();
+}
+function tryBaby(id){
+  if(S.kids.length>=4){ toast('Your home is full!'); return; }
+  if(S.homeTier<1){ toast('You need a bigger home for a baby — visit 🛍️ the Mall! 🏡'); SFX.err(); closeSheet(); return; }
+  if(S.kids.some(k=>k.ageDays<3)){ toast('The crib is already busy 👶'); SFX.err(); return; }
+  const name=KIDNAMES[Math.floor(Math.random()*KIDNAMES.length)];
+  S.kids.push({name, ageDays:0, t:0, happy:60, shirt:SHIRTS[Math.floor(Math.random()*SHIRTS.length)]});
+  buildHomies();
+  burst(S.px-cam.x,S.py-cam.y-30,'confetti'); SFX.level();
+  addXP(50); toast('👶 Welcome baby '+name+'! Find them at home 🏠'); closeSheet(); refreshLifeDot(); save();
+}
+function breakup(id){ if(!confirm('Break up with '+NPCS.find(n=>n.id===id).name+'?')) return;
+  S.partner=null; S.rels[id].rel=Math.max(0,S.rels[id].rel-30); S.rels[id].romance=false; toast('💔 You broke up.'); closeSheet(); save(); }
+
+/* ----- buildings (town doors) ----- */
+function enterBuilding(bid){
+  SFX.tap(); const b=BUILDINGS.find(x=>x.id===bid);
+  if(bid==='house'){ gotoScene('home', homeDef().spawn); return; }
+  if(bid==='office'){ showWorkSheet(); return; }
+  if(bid==='diner'){ showDiner(); return; }
+  if(bid==='mall'){ openShop(); return; }
+  if(bid==='gym'){ showGym(); return; }
+  if(bid==='hospital'){ showHospital(); return; }
+  if(bid==='nb1'){ showNPCSheet('ava'); return; }
+  if(bid==='nb2'){ showNPCSheet('noah'); return; }
+}
+function showHospital(){
+  sheetActions={};
+  let body=sheetHead('🏥','Town Hospital','Walk-ins welcome. Collapsing is pricier.');
+  body+=item('🩹','Checkup','+25 to every need',{txt:'60💰'},`data-a="chk"`);
+  sheetActions.chk=()=>{ if(!spend(60)) return;
+    for(const d of NEEDS) S.needs[d.k]=clamp(S.needs[d.k]+25,0,100);
+    burst(S.px-cam.x,S.py-cam.y-30,'spark','+🩹'); SFX.good(); addXP(6); toast('🩹 Feeling much better!'); closeSheet(); };
+  body+=item('🧘','Therapy session','+40 fun & social',{txt:'120💰'},`data-a="thx"`);
+  sheetActions.thx=()=>{ if(!spend(120)) return;
+    S.needs.fun=clamp(S.needs.fun+40,0,100); S.needs.social=clamp(S.needs.social+40,0,100);
+    burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); addXP(8); toast('🧘 Mind: cleared.'); closeSheet(); };
+  body+=item('✖️','Close','','',`data-a="x"`); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function showDiner(){
+  sheetActions={}; let body=sheetHead('🍔','Sunny Diner','Eat out — tasty & a little social');
+  FOODS_DINER.forEach((f,i)=>{ const idk='d'+i; body+=item(f.icon,f.name,'+'+f.hunger+'🍗'+(f.social?' +'+f.social+'💬':''),{txt:f.cost+'💰'},`data-a="${idk}"`);
+    sheetActions[idk]=()=>{ if(!spend(f.cost)) return; const fx={hunger:f.hunger,fun:f.fun||0}; if(f.energy)fx.energy=f.energy; if(f.social)fx.social=f.social;
+      applyFx(fx); burst(S.px-cam.x,S.py-cam.y-34,'spark','+'+f.hunger+'🍗'); SFX.eat(); S.stats.eat=(S.stats.eat||0)+1; qprogress('eat'); if(f.id==='coffee') qprogress('coffee'); addXP(6); toast('Enjoyed '+f.name+'!'); closeSheet(); }; });
+  body+=item('✖️','Close','','',`data-a="x"`); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function showGym(){
+  sheetActions={}; const tr=S.career==='trainer';
+  let body=sheetHead('🏋️','Flex Gym',tr?'Staff perks: 2× gains 💪':'Sweat now, glow later');
+  const opts=[['🏃','Cardio',{fun:14,energy:-16,hygiene:-14},25],['🏋️','Weights',{fun:10,energy:-20,hygiene:-12},30],['🧘','Yoga',{fun:18,energy:-6,hygiene:-6},25]];
+  opts.forEach((o,i)=>{ const idk='gy'+i; body+=item(o[0],o[1],'fitness +XP',{txt:'free'},`data-a="${idk}"`);
+    sheetActions[idk]=()=>{ if(S.needs.energy<12){ toast('Too tired ⚡'); SFX.err(); return; }
+      const fx={...o[2]}; if(tr) fx.fun*=2;
+      applyFx(fx); burst(S.px-cam.x,S.py-cam.y-30,'spark','💪'); SFX.good(); qprogress('fit'); addXP(tr?o[3]*2:o[3]); toast(o[1]+' done! 💪'); closeSheet(); }; });
+  body+=item('✖️','Close','','',`data-a="x"`); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function shiftPay(){
+  const c=CAREERS.find(x=>x.id===S.career);
+  let pay=c?Math.round(c.pay*(1+0.35*(S.jobLvl-1))):120;
+  if(S.outfit==='suit') pay=Math.round(pay*1.05);
+  if(S.vehicle==='limo') pay=Math.round(pay*1.1);
+  return pay;
+}
+function showWorkSheet(){
+  if(!S.career){ showCareerBoard(true); return; }
+  sheetActions={};
+  const c=CAREERS.find(x=>x.id===S.career);
+  let body=sheetHead(c.icon,'Office — '+jobTitle(),c.perk);
+  body+=`<p style="font-size:12px;color:#bdb6d6;margin:6px 2px">A shift pays ~${shiftPay()}💰. End shifts in a good mood — 2 in a row earns a promotion (rank ${S.jobLvl}/${RANKS.length}).</p>`;
+  body+=item('💼','Start a shift','6 in-game hours · ~'+shiftPay()+'💰','',`data-a="go"`);
+  sheetActions.go=()=>{ closeSheet(); beginWork(); };
+  body+=item('📋','Career board','Switch careers (rank resets)','',`data-a="board"`);
+  sheetActions.board=()=>showCareerBoard(false);
+  body+=item('✖️','Close','','',`data-a="x"`); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function showCareerBoard(first){
+  sheetActions={};
+  let body=sheetHead('📋','Career Board',first?'Pick your first job — each changes how you live!':'Switching resets your rank to Trainee');
+  CAREERS.forEach(c=>{ const cur=S.career===c.id; const idk='c_'+c.id;
+    body+=item(c.icon,c.name+(cur?' ✓':''),c.perk+' · base '+c.pay+'💰/shift',{txt:cur?'Current':'',owned:cur},`data-a="${idk}"${cur?' disabled':''}`);
+    sheetActions[idk]=()=>{
+      const had=S.career;
+      S.career=c.id; S.jobLvl=1; S.promoStreak=0;
+      SFX.level(); burst(S.px-cam.x,S.py-cam.y-30,'confetti');
+      qprogress('career');
+      toast(c.icon+' You are now a '+jobTitle()+'!'+(had?' (fresh start)':''));
+      save(); closeSheet(); updateHUDNow();
+    }; });
+  body+=item('✖️','Close','','',`data-a="x"`); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+
+/* ----- work ----- */
+function beginWork(){
+  if(!S.career){ showCareerBoard(true); return; }
+  const hour=Math.floor(S.minutes/60)%24;
+  if(hour<7||hour>17){ toast('Office hours are 7:00–17:00 😴'); SFX.err(); return; }
+  if(S.needs.energy<15){ toast('Too tired to work ⚡'); SFX.err(); return; }
+  S.atWork={left:360}; toast('💼 Clocked in…'); updateAwayChip();
+}
+function endWork(){
+  S.atWork=null;
+  const n=S.needs;
+  n.hunger=clamp(n.hunger-26,4,100); n.energy=clamp(n.energy-28,4,100); n.hygiene=clamp(n.hygiene-16,4,100);
+  n.fun=clamp(n.fun-20,4,100); n.bladder=clamp(n.bladder-22,12,100); n.social=clamp(n.social+18,0,100);
+  const pay=shiftPay();
+  addCoins(pay); SFX.coin(); burst(S.px-cam.x,S.py-cam.y-30,'coin','+'+pay+'💰');
+  qprogress('work'); addXP(40); toast('🏁 Shift done! +'+pay+'💰');
+  if(mood()>=58){
+    S.promoStreak++;
+    if(S.promoStreak>=2&&S.jobLvl<RANKS.length){
+      S.jobLvl++; S.promoStreak=0; SFX.level(); burst(vw/2,vh/3,'confetti');
+      toast('📈 Promoted! You are now a '+jobTitle()+' 🎉');
+    }
+  } else S.promoStreak=0;
+  updateAwayChip(); save();
+}
+function updateAwayChip(){ const c=el('awayChip');
+  if(S.atWork){ c.classList.add('show'); c.innerHTML='💼 At work…<small>'+Math.ceil(S.atWork.left/60)+'h left · earning</small>'; }
+  else if(S.hospital){ c.classList.add('show'); c.innerHTML='🏥 In the hospital…<small>recovering · the bill is coming</small>'; }
+  else c.classList.remove('show'); }
+
+function hospitalize(){
+  if(action&&action.returnPx){ S.px=action.returnPx[0]; S.py=action.returnPx[1]; }
+  action=null; path=[]; pending=null; closeSheet(); closeModal();
+  S.hospital={ left:240, bill:Math.floor(S.coins*0.8) };
+  toast('😵 '+S.name+' collapsed! Rushed to the hospital…'); SFX.err();
+  updateAwayChip(); save();
+}
+function leaveHospital(){
+  const bill=S.hospital.bill; S.hospital=null;
+  S.coins=Math.max(0,S.coins-bill);
+  for(const d of NEEDS) S.needs[d.k]=Math.max(S.needs[d.k],68);
+  // wake up outside the Town Hospital
+  const h=BUILDINGS.find(b=>b.id==='hospital');
+  if(scene.type!=='town') buildTown();
+  S.scene='town';
+  S.px=(h.door[0]+.5)*T; S.py=(h.door[1]+1+.5)*T;
+  centerCam(true);
+  toast('🏥 Patched up! Hospital bill: -'+bill+'💰 (80%)'); SFX.good();
+  toast('💡 Keep your needs out of the red to avoid this!');
+  updateAwayChip(); updateHUDNow(); save();
+}
+
+/* ============================================================ */
+/*                  SHOP / QUESTS / FAMILY (modals)             */
+/* ============================================================ */
+const genModal=el('genModal'), genCard=el('genCard');
+function openModal(html){ genCard.innerHTML=html; genModal.classList.add('show'); bindGen(); paused=true; }
+function closeModal(){ genModal.classList.remove('show'); paused=false; }
+let genActions={};
+function bindGen(){ genCard.querySelectorAll('[data-g]').forEach(b=>{ b.onclick=()=>{ const f=genActions[b.dataset.g]; if(f) f(b); }; }); }
+
+let shopTab='homes';
+function openShop(){ closeSheet(); shopTab='homes'; renderShop(); }
+function renderShop(){
+  genActions={};
+  let body=`<h2>🛍️ Maple Mall</h2><div class="sub">Coins: <b style="color:#ffd76a">${Math.floor(S.coins)}💰</b></div>`;
+  body+=`<div class="sheetTabs">`+
+    ['homes:🏠 Homes','vehicles:🚗 Rides','style:👕 Style','decor:🛋️ Home+','gifts:🎁 Gifts'].map(t=>{ const [k,l]=t.split(':');
+      return `<button class="pill ${shopTab===k?'sel':''}" data-g="tab_${k}">${l}</button>`; }).join('')+`</div>`;
+  if(shopTab==='homes'){
+    HOME_TIERS.forEach(h=>{ const owned=S.homeTier>=h.id; const cur=S.homeTier===h.id;
+      body+=item(h.icon,h.name,h.desc,{txt:cur?'Living here':owned?'Owned':h.price+'💰',owned:owned||cur},`data-g="home_${h.id}"${owned&&!cur?'':''}`);
+      genActions['home_'+h.id]=()=>buyHome(h);
+    });
+  } else if(shopTab==='vehicles'){
+    body+=item('🚶','On foot','Always available',{txt:S.vehicle?'':'Active',owned:!S.vehicle},`data-g="veh_none"`); genActions.veh_none=()=>{ S.vehicle=null; toast('Walking it is 🚶'); save(); renderShop(); };
+    VEHICLES.forEach(v=>{ const owned=(S.vehicles||[]).includes(v.id); const active=S.vehicle===v.id;
+      body+=item(v.icon,v.name,v.desc,{txt:active?'Driving':owned?'Owned · tap to drive':v.price+'💰',owned:owned||active},`data-g="veh_${v.id}"`);
+      genActions['veh_'+v.id]=()=>buyVehicle(v);
+    });
+  } else if(shopTab==='gifts'){
+    body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">Stock up, then give gifts to build relationships 💞</p>`;
+    GIFTS.forEach(g=>{ const have=(S.gifts&&S.gifts[g.id])||0;
+      body+=item(g.icon,g.name,g.desc+(have?' · have '+have:''),{txt:g.price+'💰'},`data-g="gift_${g.id}"`);
+      genActions['gift_'+g.id]=()=>{ if(!spend(g.price)) return; S.gifts[g.id]=(S.gifts[g.id]||0)+1; SFX.coin(); toast('Bought '+g.name+' '+g.icon); save(); renderShop(); };
+    });
+  } else if(shopTab==='style'){
+    body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">Outfits change your look — and your life 👗</p>`;
+    body+=item('🧍','Original look','Back to your first shirt',{txt:S.outfit?'Wear':'Wearing',owned:!S.outfit},`data-g="of_none"`);
+    genActions.of_none=()=>{ S.outfit=null; S.shirt=S.baseShirt; SFX.good(); toast('Back to the classic look 🧍'); save(); renderShop(); };
+    OUTFITS.forEach(of=>{ const owned=S.wardrobe.includes(of.id); const on=S.outfit===of.id;
+      body+=item(of.icon,of.name,of.perk,{txt:on?'Wearing':owned?'Wear':of.price+'💰',owned:on||owned},`data-g="of_${of.id}"`);
+      genActions['of_'+of.id]=()=>{
+        if(!owned){ if(!spend(of.price)) return; S.wardrobe.push(of.id); qprogress('outfit'); SFX.coin(); burst(vw/2,vh/2,'confetti'); }
+        S.outfit=of.id; S.shirt=of.col; SFX.good(); toast('Wearing the '+of.name+' '+of.icon);
+        save(); renderShop(); };
+    });
+    body+=`<label style="display:block;font-size:11px;font-weight:700;color:#bdb6d6;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px">💈 Salon — hair color (${SALON_HAIR_PRICE}💰)</label>`;
+    body+=`<div class="swatches">`+HAIRC.map((c,i)=>`<button class="sw ${S.hair===c?'sel':''}" style="background:${c}" data-g="hc_${i}"></button>`).join('')+`</div>`;
+    HAIRC.forEach((c,i)=>{ genActions['hc_'+i]=()=>{ if(S.hair===c) return; if(!spend(SALON_HAIR_PRICE)) return; S.hair=c; SFX.good(); burst(vw/2,vh/3,'spark'); toast('Fresh color! 💈'); save(); renderShop(); }; });
+    body+=`<label style="display:block;font-size:11px;font-weight:700;color:#bdb6d6;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px">💈 Hair style (${SALON_STYLE_PRICE}💰)</label>`;
+    body+=`<div class="pillrow">`+HAIRSTYLES.map((nm,i)=>`<button class="pill ${S.hairStyle===i?'sel':''}" data-g="hs_${i}">${nm}</button>`).join('')+`</div>`;
+    HAIRSTYLES.forEach((nm,i)=>{ genActions['hs_'+i]=()=>{ if(S.hairStyle===i) return; if(!spend(SALON_STYLE_PRICE)) return; S.hairStyle=i; SFX.good(); toast("New 'do! 💈"); save(); renderShop(); }; });
+  } else if(shopTab==='decor'){
+    body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">Upgrade rooms in tiers — each level improves daily life 🏡</p>`;
+    HOME_UPGRADES.forEach(u=>{
+      const lv=(S.homeLv&&S.homeLv[u.id])||0; const cur=u.tiers[lv]; const next=u.tiers[lv+1];
+      if(next){
+        body+=item(u.icon,u.name+' → '+next.name,'Now: '+cur.name+' · '+next.desc,{txt:next.price+'💰'},`data-g="hu_${u.id}"`);
+        genActions['hu_'+u.id]=()=>{ if(!spend(next.price)) return; S.homeLv[u.id]=lv+1; SFX.level(); burst(vw/2,vh/2,'confetti'); addXP(15); toast(u.icon+' '+next.name+' installed!'); save(); renderShop(); };
+      } else {
+        body+=item(u.icon,u.name+': '+cur.name,'Fully upgraded ✨',{txt:'MAX',owned:true},'disabled');
+      }
+    });
+  }
+  body+=`<button class="closebtn" data-g="close">Done</button>`;
+  genActions.tab_homes=()=>{shopTab='homes';renderShop();}; genActions.tab_vehicles=()=>{shopTab='vehicles';renderShop();};
+  genActions.tab_gifts=()=>{shopTab='gifts';renderShop();}; genActions.tab_decor=()=>{shopTab='decor';renderShop();};
+  genActions.tab_style=()=>{shopTab='style';renderShop();};
+  genActions.close=closeModal;
+  openModal(body);
+}
+function buyHome(h){
+  if(S.homeTier===h.id){ return; }
+  if(S.homeTier>=h.id){ S.homeTier=h.id; if(scene.type==='home') buildHome(); toast('Moved into '+h.name); save(); renderShop(); return; }
+  if(!spend(h.price)) return;
+  S.homeTier=h.id; SFX.level(); burst(vw/2,vh/2,'confetti'); addXP(40);
+  if(scene.type==='home') gotoScene('home', homeDef().spawn);
+  toast('🎉 You bought the '+h.name+'!'); save(); renderShop();
+}
+function buyVehicle(v){
+  const owned=(S.vehicles||[]).includes(v.id);
+  if(owned){ S.vehicle=v.id; toast('Now driving the '+v.name+' '+v.icon); save(); renderShop(); return; }
+  if(!spend(v.price)) return;
+  S.vehicles=S.vehicles||[]; S.vehicles.push(v.id); S.vehicle=v.id; SFX.level(); burst(vw/2,vh/2,'confetti');
+  qprogress('vehicle'); addXP(40); toast('🎉 Got a '+v.name+'! '+v.icon); save(); renderShop();
+}
+
+/* ----- unified Life modal: Quests | People | Save ----- */
+let lifeTab='quests';
+function openQuests(){ closeSheet(); lifeTab='quests'; renderLife(); }
+function lifeTabBar(){
+  const dot=S.quests.some(q=>q.done&&!q.claimed)?' •':'';
+  return `<div class="sheetTabs">`+
+    [['quests','📋 Quests'+dot],['people','👪 People'],['save','💾 Save']].map(([k,l])=>
+      `<button class="pill ${lifeTab===k?'sel':''}" data-g="lt_${k}">${l}</button>`).join('')+`</div>`;
+}
+function renderLife(){
+  genActions={};
+  if(lifeTab==='people'){ renderPeople(); return; }
+  if(lifeTab==='save'){ renderSave(); return; }
+  // quests (default)
+  let body=`<h2>📋 Quests</h2><div class="sub">Little goals, big rewards. New ones appear as you play.</div>`;
+  body+=lifeTabBar();
+  S.quests.forEach((q,i)=>{ const def=QUEST_POOL.find(d=>d.id===q.id); if(!def) return;
+    const pct=Math.round(q.prog/def.n*100);
+    body+=`<div class="quest"><div class="qrow"><span class="qi">${def.icon}</span><b>${def.txt}</b><span class="qreward">+${def.coin}💰 +${def.xp}xp</span></div>`;
+    body+=`<div class="qbarWrap"><div class="qbar" style="width:${pct}%"></div></div>`;
+    if(q.done&&!q.claimed) body+=`<button class="claim" data-g="claim_${i}">Claim reward 🎉</button>`;
+    else body+=`<div style="font-size:11px;color:#bdb6d6;margin-top:6px">${q.claimed?'✅ Claimed':q.prog+' / '+def.n}</div>`;
+    body+=`</div>`;
+    genActions['claim_'+i]=()=>claimQuest(i);
+  });
+  body+=`<button class="closebtn" data-g="close">Close</button>`;
+  wireLifeTabs(); genActions.close=closeModal;
+  openModal(body);
+}
+function wireLifeTabs(){ genActions.lt_quests=()=>{lifeTab='quests';renderLife();}; genActions.lt_people=()=>{lifeTab='people';renderLife();}; genActions.lt_save=()=>{lifeTab='save';renderLife();}; }
+function claimQuest(i){
+  const q=S.quests[i]; const def=QUEST_POOL.find(d=>d.id===q.id); if(!q.done||q.claimed) return;
+  q.claimed=true; addCoins(def.coin); SFX.coin(); burst(vw/2,vh/2,'confetti'); addXP(def.xp);
+  toast('🎉 +'+def.coin+'💰 +'+def.xp+'xp'); save();
+  // replace with a fresh quest after a beat
+  setTimeout(()=>{ rerollQuest(i); renderLife(); refreshLifeDot(); }, 400);
+  renderLife();
+}
+function eligibleQuest(def){
+  if(def.cond==='noPartner'&&S.partner) return false;
+  if(def.cond==='hasPartner'&&!S.partner) return false;
+  if(def.cond==='hasKid'&&(!S.kids||!S.kids.length)) return false;
+  if(def.cond==='noVehicle'&&(S.vehicles&&S.vehicles.length)) return false;
+  if(def.cond==='noCareer'&&S.career) return false;
+  if(def.cond==='noOutfit'&&S.outfit) return false;
+  return true;
+}
+function rerollQuest(i){
+  const active=new Set(S.quests.map(q=>q.id));
+  const pool=QUEST_POOL.filter(d=>!active.has(d.id)&&eligibleQuest(d));
+  const pick=pool.length?pool[Math.floor(Math.random()*pool.length)]:QUEST_POOL[Math.floor(Math.random()*QUEST_POOL.length)];
+  S.quests[i]={id:pick.id, prog:0, done:false, claimed:false};
+}
+function seedQuests(){ S.quests=[]; const used=new Set();
+  while(S.quests.length<4){ const d=QUEST_POOL[Math.floor(Math.random()*QUEST_POOL.length)];
+    if(used.has(d.id)||!eligibleQuest(d)) continue; used.add(d.id); S.quests.push({id:d.id,prog:0,done:false,claimed:false}); } }
+function refreshLifeDot(){ const any=S.quests.some(q=>q.done&&!q.claimed); el('lifeBtn').classList.toggle('dot',any); }
+
+/* family */
+function openFamily(){ closeSheet(); lifeTab='people'; renderLife(); }
+function renderPeople(){
+  genActions={};
+  let body=`<h2>👪 People</h2><div class="sub">Your partner, kids & friends.</div>`;
+  body+=lifeTabBar();
+  // partner
+  if(S.partner){ const p=NPCS.find(n=>n.id===S.partner);
+    body+=`<div class="relrow"><canvas class="ravatar" data-av="${p.id}" width="34" height="34"></canvas><div class="rinfo"><b>${p.name} <span class="tag">PARTNER</span></b><span class="meta">${Math.round(S.rels[p.id].rel)}❤ · ${S.kids.length} kid(s)</span></div></div>`; }
+  // kids
+  (S.kids||[]).forEach(k=>{ const stage=k.ageDays>=8?'Teen':k.ageDays>=3?'Child':'Baby';
+    body+=`<div class="relrow"><div class="ravatar" style="display:flex;align-items:center;justify-content:center;font-size:18px">${k.ageDays>=3?'🧒':'👶'}</div><div class="rinfo"><b>${k.name} <span class="tag kid">${stage}</span></b><span class="meta">Happiness ${Math.round(k.happy||50)} · age ${k.ageDays}d</span></div></div>`; });
+  // friends
+  const friends=Object.entries(S.rels).filter(([id,r])=>r.rel>0&&id!==S.partner).sort((a,b)=>b[1].rel-a[1].rel);
+  if(friends.length){ body+=`<label>Townsfolk</label>`;
+    friends.forEach(([id,r])=>{ const def=NPCS.find(n=>n.id===id); if(!def) return;
+      body+=`<div class="relrow"><canvas class="ravatar" data-av="${id}" width="34" height="34"></canvas><div class="rinfo"><b>${def.name}</b><div class="heartWrap"><div class="heartBar" style="width:${r.rel}%"></div></div></div><span class="meta">${Math.round(r.rel)}❤</span></div>`; }); }
+  if(!S.partner&&!friends.length) body+=`<p style="color:#bdb6d6;font-size:12.5px;margin-top:10px">Head out 🚪 and chat with townsfolk to build relationships. Reach 75❤ + a 💍 ring to propose!</p>`;
+  body+=`<button class="closebtn" data-g="close">Close</button>`;
+  wireLifeTabs(); genActions.close=closeModal;
+  openModal(body);
+  // draw avatars
+  genCard.querySelectorAll('[data-av]').forEach(c=>{ const def=NPCS.find(n=>n.id===c.dataset.av); if(def) drawAvatar(c,def); });
+}
+function drawAvatar(canvas,look){
+  const x=canvas.getContext('2d'); x.clearRect(0,0,34,34); x.fillStyle='#161426'; x.fillRect(0,0,34,34);
+  x.fillStyle=look.skin; x.beginPath(); x.arc(17,15,9,0,7); x.fill();
+  x.fillStyle=look.hair; x.fillRect(8,6,18,7);
+  x.fillStyle=look.shirt; x.fillRect(8,22,18,10);
+  x.fillStyle='#1d1626'; x.beginPath(); x.arc(14,15,1.5,0,7); x.arc(20,15,1.5,0,7); x.fill();
+}
+function renderSave(){
+  genActions={};
+  let body=`<h2>💾 Save</h2><div class="sub">Profile: <b>${S.name}</b> · auto-saves to this device.</div>`;
+  body+=lifeTabBar();
+  body+=`<label>Transfer code</label><div class="sub" style="margin-bottom:6px">Copy this to move your game to another device, then paste it into "Load code" there.</div>`;
+  body+=`<textarea id="saveCode" readonly>${makeCode()}</textarea>`;
+  body+=`<button class="bigbtn" data-g="copy" style="margin-top:10px">Copy code 📋</button>`;
+  body+=`<label>Load a code</label><textarea id="loadCode" placeholder="Paste a transfer code…"></textarea>`;
+  body+=`<button class="bigbtn" data-g="load" style="margin-top:10px;background:linear-gradient(135deg,#7a5bd6,#5b6bd6);color:#fff">Load code ⬇️</button>`;
+  body+=`<button class="linkbtn" data-g="switch">Switch / create another profile</button>`;
+  body+=`<button class="closebtn" data-g="close">Close</button>`;
+  wireLifeTabs(); genActions.close=closeModal;
+  genActions.copy=()=>{ const t=el('saveCode'); t.select(); try{ document.execCommand('copy'); }catch(e){} navigator.clipboard&&navigator.clipboard.writeText(t.value); toast('Copied! 📋'); };
+  genActions.load=()=>{ const v=el('loadCode').value.trim(); if(!v) return; loadCode(v); };
+  genActions.switch=()=>{ save(); closeModal(); Profiles.show(); };
+  openModal(body);
+}
+function makeCode(){ try{ return btoa(unescape(encodeURIComponent(JSON.stringify(S)))); }catch(e){ return ''; } }
+function loadCode(code){
+  try{ const obj=JSON.parse(decodeURIComponent(escape(atob(code.trim()))));
+    if(!obj.name||!obj.needs) throw 0;
+    S=normalize(obj); save(); closeModal(); rebuildAll(); toast('✅ Loaded '+S.name+"'s game"); }
+  catch(e){ toast('That code is invalid ❌'); SFX.err(); }
+}
+
+/* ============================================================ */
+/*                    STATE / PROFILES                          */
+/* ============================================================ */
+function freshState(opts){
+  const s={ v:2, name:opts.name, skin:opts.skin, shirt:opts.shirt, hair:opts.hair, hairStyle:opts.hairStyle,
+    scene:'home', px:0, py:0,
+    needs:{hunger:82,energy:85,hygiene:80,bladder:78,fun:72,social:70},
+    coins:500, level:1, xp:0, promoStreak:0, minutes:8*60,
+    homeTier:0, upgrades:{}, homeLv:{bed:0,tv:0,kitchen:0,decor:0,bath:0},
+    career:null, jobLvl:1, wardrobe:[], outfit:null, baseShirt:opts.shirt,
+    vehicles:[], vehicle:null, gifts:{},
+    rels:{}, partner:null, kids:[], quests:[], stats:{}, warned:{} };
+  return s;
+}
+function normalize(s){
+  s.upgrades=s.upgrades||{}; s.vehicles=s.vehicles||[]; s.gifts=s.gifts||{}; s.rels=s.rels||{};
+  s.kids=s.kids||[]; s.stats=s.stats||{}; s.warned=s.warned||{}; s.quests=s.quests||[];
+  if(typeof s.homeTier!=='number') s.homeTier=0; if(typeof s.xp!=='number') s.xp=0;
+  // v3: tiered home upgrades (migrate old booleans), careers, wardrobe
+  if(!s.homeLv){
+    s.homeLv={bed:0,tv:0,kitchen:0,decor:0,bath:0};
+    const u=s.upgrades;
+    if(u.kingbed) s.homeLv.bed=1; if(u.cinema) s.homeLv.tv=1;
+    if(u.chef) s.homeLv.kitchen=1; if(u.zen) s.homeLv.decor=1;
+  }
+  s.career=s.career||null; if(typeof s.jobLvl!=='number') s.jobLvl=1;
+  if(typeof s.promoStreak!=='number') s.promoStreak=0;
+  s.wardrobe=s.wardrobe||[]; s.outfit=s.outfit||null;
+  s.baseShirt=s.baseShirt||s.shirt;
+  if(!s.quests.length) { S=s; seedQuests(); }
+  return s;
+}
+function jobTitle(){
+  if(!S.career) return 'Unemployed';
+  const c=CAREERS.find(x=>x.id===S.career);
+  return RANKS[Math.min(S.jobLvl-1,RANKS.length-1)]+' '+(c?c.name:'');
+}
+
+function save(){ if(!S||!profileId) return; try{ localStorage.setItem('pl-save-'+profileId, JSON.stringify(S)); }catch(e){} }
+function rebuildAll(){
+  if(S.scene==='town') buildTown(); else buildHome();
+  const sp=S.scene==='town'?TOWN_SPAWN:homeDef().spawn;
+  if(!S.px){ S.px=(sp[0]+.5)*T; S.py=(sp[1]+.5)*T; }
+  buildNeedsUI(); centerCam(true); refreshLifeDot(); updateAwayChip();
+}
+
+/* needs UI */
+const barEls={};
+function buildNeedsUI(){ const box=el('needs'); box.innerHTML=''; for(const d of NEEDS){ const div=document.createElement('div'); div.className='need';
+  div.innerHTML='<span class="ic">'+d.ic+'</span><span class="lbl">'+d.lbl+'</span><div class="bar"><i></i></div>'; box.appendChild(div); barEls[d.k]=div.querySelector('i'); } }
+let hudT=0;
+function updateHUD(){
+  if(!S) return; const now=performance.now(); if(now-hudT<180) return; hudT=now;
+  for(const d of NEEDS){ const v=S.needs[d.k]; const b=barEls[d.k]; if(!b) continue; b.style.width=v+'%';
+    b.style.background=v>50?'#5ee07a':v>25?'#ffb84d':'#ff5d6c'; }
+  const moodEl=document.querySelector('#who .mood'); moodEl.textContent=moodEmoji(); moodEl.classList.toggle('glow',mood()>=78);
+  document.querySelector('#who .nm').textContent=S.name;
+  el('lvlBadge').textContent='Lv '+S.level+' · '+jobTitle();
+  const day=Math.floor(S.minutes/1440)+1, hh=String(Math.floor(S.minutes/60)%24).padStart(2,'0'), mm=String(Math.floor(S.minutes%60)).padStart(2,'0');
+  el('clock').innerHTML='<b>Day '+day+'</b><br>'+hh+':'+mm;
+  el('coins').textContent='💰 '+Math.floor(S.coins);
+  el('xpBar').style.width=(S.xp/(80+S.level*40)*100)+'%';
+  el('outBtn').innerHTML = scene&&scene.type==='town' ? '🏠 Home' : '🚪 Go Out';
+}
+function updateHUDNow(){ hudT=0; updateHUD(); }
+
+/* ============================================================ */
+/*                        INPUT                                 */
+/* ============================================================ */
+cv.addEventListener('pointerdown',e=>{
+  if(!S||S.atWork||S.hospital||paused||transition>0) return;
+  if(!AC){ blip(1,0.001,'sine',0.0001); } // unlock audio on first touch
+  const rect=cv.getBoundingClientRect();
+  const wx=(e.clientX-rect.left)/scale+cam.x, wy=(e.clientY-rect.top)/scale+cam.y;
+  const c=Math.floor(wx/T), r=Math.floor(wy/T);
+  // npc? (forgiving: snap to nearest NPC within ~1.4 tiles of the tap)
+  if(scene.type==='town'){
+    let best=null, bestD=T*1.4;
+    for(const n of npcSprites){ const dd=Math.hypot(n.px-wx,n.py-wy); if(dd<bestD){ bestD=dd; best=n; } }
+    if(best){ tapNPC(best); return; }
+    const door=scene.doors.get(c+','+r); if(door&&door.startsWith('B:')){ goNextTo(c,r,()=>enterBuilding(door.slice(2))); return; }
+  } else {
+    // partner / kid at home?
+    let best=null, bestD=T*1.3;
+    for(const n of homies){ const dd=Math.hypot(n.px-wx,n.py-wy); if(dd<bestD){ bestD=dd; best=n; } }
+    if(best){ SFX.tap(); const tc=Math.floor(best.px/T), tr=Math.floor(best.py/T);
+      goNextTo(tc,tr,()=> best.kind==='partner'?showNPCSheet(best.id):showKidSheet(best.idx)); return; }
+  }
+  // furniture?
+  const o=scene.furnAt.get(c+','+r); if(o){ tapObject(o); return; }
+  // walk
+  if(walkable(c,r)){ SFX.tap(); goTo(c,r,null); }
+});
+
+/* buttons (wired from index via Game.* ) */
+function toggleOut(){ if(!S||S.atWork||S.hospital||transition>0) return; SFX.tap();
+  if(scene.type==='town') gotoScene('home', homeDef().spawn);
+  else gotoScene('town', TOWN_SPAWN);
+}
+function quickWork(){ if(!S||S.hospital||S.atWork) return; SFX.tap();
+  if(scene.type==='town'){ const b=BUILDINGS.find(x=>x.id==='office'); goNextTo(b.door[0],b.door[1],()=>beginWork()); }
+  else { toast('Head out 🚪 to reach the office 💼'); }
+}
+function toggleSpeed(){ speed=speed===1?3:1; el('speedBtn').textContent=speed===1?'▶︎ 1×':'⏩ 3×'; }
+
+/* ============================================================ */
+/*                    PROFILE / LOGIN UI                        */
+/* ============================================================ */
+const Profiles=(()=>{
+  function all(){ try{ return JSON.parse(localStorage.getItem('pl-profiles')||'{}'); }catch(e){ return {}; } }
+  function setAll(o){ localStorage.setItem('pl-profiles', JSON.stringify(o)); }
+  function show(){
+    const m=el('profileModal'); const list=el('profileList'); list.innerHTML='';
+    const ps=all(); const ids=Object.keys(ps);
+    if(!ids.length){ list.innerHTML=`<p style="color:#bdb6d6;font-size:13px;margin-bottom:6px">No profiles yet — create your first life below.</p>`; }
+    ids.forEach(id=>{ const p=ps[id]; const btn=document.createElement('button'); btn.className='profcard';
+      btn.innerHTML=`<canvas class="pfava" width="42" height="42"></canvas><div style="flex:1;min-width:0"><b>${p.name}</b><span>Lv ${p.level||1} · ${p.coins||0}💰 · ${p.tag||'Resident'}</span></div><span style="color:#8d87a6">▶</span>`;
+      drawAvatar2(btn.querySelector('canvas'),p.look); btn.onclick=()=>login(id); list.appendChild(btn);
+      // long-press to delete
+      let lp; btn.addEventListener('pointerdown',()=>{ lp=setTimeout(()=>{ if(confirm('Delete profile "'+p.name+'"?')){ del(id); show(); } },650); });
+      ['pointerup','pointerleave','pointermove'].forEach(ev=>btn.addEventListener(ev,()=>clearTimeout(lp)));
+    });
+    m.classList.add('show');
+  }
+  function drawAvatar2(canvas,look){ if(!look) return; const x=canvas.getContext('2d'); x.clearRect(0,0,42,42);
+    x.fillStyle=look.skin; x.beginPath(); x.arc(21,19,11,0,7); x.fill(); x.fillStyle=look.hair; x.fillRect(10,7,22,9);
+    x.fillStyle=look.shirt; x.fillRect(9,28,24,12); x.fillStyle='#1d1626'; x.beginPath(); x.arc(17,19,2,0,7); x.arc(25,19,2,0,7); x.fill(); }
+  function login(id){ const ps=all(); if(!ps[id]) return; profileId=id;
+    let saved=null; try{ saved=JSON.parse(localStorage.getItem('pl-save-'+id)); }catch(e){}
+    if(!saved){ saved=freshState(ps[id].look?{...ps[id].look,name:ps[id].name}:{name:ps[id].name,skin:SKINS[2],shirt:SHIRTS[1],hair:HAIRC[1],hairStyle:0}); }
+    S=normalize(saved); if(!S.quests.length) seedQuests();
+    localStorage.setItem('pl-last',id);
+    el('profileModal').classList.remove('show'); begin();
+  }
+  function create(meta,state){ const ps=all(); const id='p'+Date.now().toString(36); ps[id]={name:meta.name, look:meta, level:1, coins:500, tag:'New in town'}; setAll(ps);
+    profileId=id; S=state; save(); syncMeta(); localStorage.setItem('pl-last',id); el('profileModal').classList.remove('show'); begin(); }
+  function del(id){ const ps=all(); delete ps[id]; setAll(ps); localStorage.removeItem('pl-save-'+id); }
+  function syncMeta(){ if(!profileId||!S) return; const ps=all(); if(ps[profileId]){ ps[profileId].level=S.level; ps[profileId].coins=Math.floor(S.coins);
+    ps[profileId].tag=S.partner?'Married':(S.kids&&S.kids.length?'Parent':jobTitle()); setAll(ps); } }
+  return {show, create, login, syncMeta, all};
+})();
+
+/* creator */
+function showCreate(){
+  el('profileModal').classList.remove('show');
+  const m=el('createModal'); m.classList.add('show');
+  const pick={skin:SKINS[2], shirt:SHIRTS[1], hair:HAIRC[1], hairStyle:0};
+  const pcv=el('previewCv'); pcv.width=120; pcv.height=120;
+  const pctx=pcv.getContext('2d');
+  function drawPrev(){ pctx.clearRect(0,0,120,120); pctx.save(); pctx.translate(0,0);
+    // reuse drawPerson by temporarily targeting pctx: simpler manual draw
+    const x=60,y=92,sp=2.4, look=pick;
+    pctx.fillStyle='rgba(0,0,0,.2)'; pctx.beginPath(); pctx.ellipse(x,y+2,16,6,0,0,7); pctx.fill();
+    pctx.fillStyle='#3a3550'; pctx.fillRect(x-12,y-16,10,16); pctx.fillRect(x+2,y-16,10,16);
+    pctx.fillStyle=look.shirt; rrp(pctx,x-18,y-50,36,36,8);
+    pctx.fillStyle=look.skin; rrp(pctx,x-18,y-86,36,36,12);
+    pctx.fillStyle=look.hair; rrp(pctx,x-18,y-86,36,16,10);
+    if(look.hairStyle===1){ rrp(pctx,x-18,y-86,9,34,5); rrp(pctx,x+9,y-86,9,34,5); }
+    if(look.hairStyle===2){ for(let i=0;i<4;i++){ pctx.beginPath(); pctx.moveTo(x-14+i*9,y-72); pctx.lineTo(x-18+i*9,y-92); pctx.lineTo(x-6+i*9,y-74); pctx.closePath(); pctx.fill(); } }
+    pctx.fillStyle='#1d1626'; pctx.beginPath(); pctx.arc(x-7,y-66,3,0,7); pctx.arc(x+7,y-66,3,0,7); pctx.fill();
+    pctx.restore();
+  }
+  function rrp(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); c.fill(); }
+  drawPrev();
+  function sw(elid,colors,key){ const box=el(elid); box.innerHTML=''; colors.forEach(col=>{ const b=document.createElement('button'); b.className='sw'+(pick[key]===col?' sel':''); b.style.background=col;
+    b.onclick=()=>{ pick[key]=col; box.querySelectorAll('.sw').forEach(s=>s.classList.remove('sel')); b.classList.add('sel'); drawPrev(); }; box.appendChild(b); }); }
+  sw('skinSw',SKINS,'skin'); sw('shirtSw',SHIRTS,'shirt'); sw('hairSw',HAIRC,'hair');
+  const hsBox=el('hairStyleSw'); hsBox.innerHTML=''; HAIRSTYLES.forEach((nm,i)=>{ const b=document.createElement('button'); b.className='pill'+(pick.hairStyle===i?' sel':''); b.textContent=nm;
+    b.onclick=()=>{ pick.hairStyle=i; hsBox.querySelectorAll('.pill').forEach(p=>p.classList.remove('sel')); b.classList.add('sel'); drawPrev(); }; hsBox.appendChild(b); });
+  el('startBtn').onclick=()=>{ const name=(el('nameInput').value.trim()||'Alex').slice(0,12);
+    const meta={name,...pick}; const st=freshState(meta); S=st; seedQuests();
+    m.classList.remove('show'); Profiles.create(meta,st);
+    toast('Tap furniture to interact 👆'); setTimeout(()=>toast('Tap 🚪 Go Out to explore town'),3000);
+  };
+  el('backToProfiles').onclick=()=>{ m.classList.remove('show'); Profiles.show(); };
+}
+
+/* ============================================================ */
+/*                          BOOT                                */
+/* ============================================================ */
+function begin(){
+  // welcome-back kindness: nobody returns to a miserable sim
+  let rested=false;
+  for(const d of NEEDS){ if(S.needs[d.k]<55){ S.needs[d.k]=55+Math.random()*20; rested=true; } }
+  for(const k of (S.kids||[])) if((k.happy||0)<55) k.happy=60;
+  rebuildAll();
+  resize();
+  Profiles.syncMeta();
+  toast(rested ? '☀️ '+S.name+' rested up while you were away' : 'Welcome back, '+S.name+' 👋');
+}
+function loop(now){
+  const dt=Math.min(0.05,(lastFrame? (now-lastFrame)/1000 : 0)); lastFrame=now;
+  if(S&&!paused){ moveSim(dt); tickNPCs(dt); tickHomies(dt); tick(dt); updateParts(dt); centerCam(false); }
+  if(transition>0){ transition-=dt*3.2; if(transition<=0.5&&transitionTo){ transitionTo(); transitionTo=null; } if(transition<0) transition=0; }
+  draw(); updateHUD();
+  requestAnimationFrame(loop);
+}
+let lastFrame=0;
+window.addEventListener('resize',()=>{ if(S) resize(); });
+document.addEventListener('visibilitychange',()=>{ if(document.hidden&&S){ save(); Profiles.syncMeta(); } });
+setInterval(()=>{ if(S){ save(); Profiles.syncMeta(); } },6000);
+
+// public API
+return {
+  bootProfiles:()=>Profiles.show(),
+  showCreate,
+  toggleOut, quickWork, toggleSpeed,
+  openShop, openQuests, openFamily,
+  startLoop:()=>requestAnimationFrame(loop),
+  _dbg:()=>({S, scene, homies, npcCount:npcSprites.length, rebuild:()=>{ if(scene.type==='home') buildHome(); else buildTown(); }}),
+};
+})();

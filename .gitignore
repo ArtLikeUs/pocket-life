@@ -1,0 +1,5 @@
+deploy/
+PocketLife-web.zip
+.claude/
+__pycache__/
+.DS_Store
