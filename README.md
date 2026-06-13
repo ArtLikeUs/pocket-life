@@ -2,7 +2,20 @@
 
 A cozy Sims-style life sim that runs as a web app on iPhone (16 and newer — works on older iPhones too). Game Boy Color/Pokémon-style town to explore, a family to raise, and a steady drip of small wins.
 
-## Play on your iPhone
+## ▶️ Play it now
+
+**https://artlikeus.github.io/pocket-life/** — works on any phone or computer, any browser. Share that link with anyone! On a phone, tap **Share → Add to Home Screen** for a real app icon.
+
+### Updating the live site later
+
+This folder is a git repo connected to GitHub. After you change the game, republish with:
+```sh
+cd ~/Developer/PocketLife
+git add -A && git commit -m "update" && git push
+```
+GitHub Pages rebuilds automatically in ~1 minute. (Tip: bump the `?v=` number in `index.html` so phones grab the new version.)
+
+## Play on your iPhone (local, no internet host)
 
 ### Option A — same Wi-Fi as your Mac (quickest)
 
