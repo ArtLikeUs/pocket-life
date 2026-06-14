@@ -6,8 +6,13 @@ const VIEW_COLS = 12, VIEW_ROWS = 14;   // camera viewport in tiles
 
 const SKINS  = ['#8d5524','#c68642','#e0ac69','#f1c27d','#ffdbac'];
 const SHIRTS = ['#e74c3c','#3498db','#2ecc71','#9b59b6','#f39c12','#16a085','#e84393','#2d3436'];
-const HAIRC  = ['#1a1a1a','#3b2b20','#7b4a12','#b8860b','#d63031','#6c5ce7'];
-const HAIRSTYLES = ['Short','Long','Spiky'];
+const HAIRC  = ['#1a1a1a','#3b2b20','#7b4a12','#b8860b','#d63031','#6c5ce7','#e84393','#fab1a0'];
+const HAIRSTYLES = ['Short','Long','Spiky','Bob','Ponytail','Buns','Bald'];
+const GENDERS = [
+  { id:'f', label:'Woman',     icon:'♀' },
+  { id:'m', label:'Man',       icon:'♂' },
+  { id:'nb', label:'Nonbinary', icon:'⚧' },
+];
 
 /* ---------------- homes ----------------
    map legend: '#' wall, '.' floor
@@ -291,12 +296,12 @@ const JOBS = ['Intern','Barista','Designer','Manager','Director','CEO']; // lega
    each career changes how the rest of the game plays                     */
 const RANKS = ['Trainee','Junior','Senior','Lead','Legend'];
 const CAREERS = [
-  { id:'barista', icon:'☕', name:'Barista',    pay:170, perk:'Coffee & espresso give 2× energy' },
-  { id:'chef',    icon:'🍳', name:'Chef',       pay:200, perk:'Home meals are +30% tastier' },
-  { id:'trainer', icon:'🏋️', name:'Trainer',    pay:190, perk:'Workouts: 2× fun & XP, energy drains slower' },
-  { id:'techie',  icon:'💻', name:'Programmer', pay:240, perk:'Computer gigs pay 2×' },
-  { id:'artist',  icon:'🎨', name:'Artist',     pay:160, perk:'Fun drains 30% slower · +25% XP from everything' },
-  { id:'doctor',  icon:'🩺', name:'Doctor',     pay:280, perk:'All needs drain 15% slower' },
+  { id:'barista', icon:'☕', name:'Barista',    pay:170, perk:'Coffee & espresso give 2× energy',       games:['pour','rush'] },
+  { id:'chef',    icon:'🍳', name:'Chef',       pay:200, perk:'Home meals are +30% tastier',            games:['plate','recipe'] },
+  { id:'trainer', icon:'🏋️', name:'Trainer',    pay:190, perk:'Workouts: 2× fun & XP, energy drains slower', games:['reps','form'] },
+  { id:'techie',  icon:'💻', name:'Programmer', pay:240, perk:'Computer gigs pay 2×',                   games:['debug','ship'] },
+  { id:'artist',  icon:'🎨', name:'Artist',     pay:160, perk:'Fun drains 30% slower · +25% XP',        games:['stroke','palette'] },
+  { id:'doctor',  icon:'🩺', name:'Doctor',     pay:280, perk:'All needs drain 15% slower',             games:['diagnose','steady'] },
 ];
 
 /* ---------------- clothing store ---------------- */
@@ -305,10 +310,43 @@ const OUTFITS = [
   { id:'mint',   icon:'🍃', name:'Mint Polo',    col:'#55efc4', price:120, perk:'Fresh look' },
   { id:'hoodie', icon:'🧥', name:'Cozy Hoodie',  col:'#6c5ce7', price:250, perk:'Fun drains 10% slower' },
   { id:'sporty', icon:'🎽', name:'Track Kit',    col:'#00b894', price:280, perk:'Walk 15% faster' },
-  { id:'dress',  icon:'👗', name:'Sunset Dress', col:'#ff7675', price:300, perk:'+2❤ from socializing' },
+  { id:'dress',  icon:'👗', name:'Sunset Dress', col:'#ff7675', price:300, perk:'+2❤ from socializing', dress:true },
   { id:'suit',   icon:'🤵', name:'Sharp Suit',   col:'#2d3436', price:400, perk:'+5% work pay' },
+  // feminine / dressy options
+  { id:'blouse', icon:'👚', name:'Silk Blouse',   col:'#ff9ff3', price:150, perk:'+1❤ from socializing' },
+  { id:'skirt',  icon:'🩱', name:'A-Line Skirt',  col:'#a29bfe', price:180, perk:'Walk 10% faster', dress:true },
+  { id:'floral', icon:'🌸', name:'Floral Dress',  col:'#fd79a8', price:320, perk:'Fun drains 12% slower', dress:true },
+  { id:'romper', icon:'🩳', name:'Summer Romper', col:'#fab1a0', price:200, perk:'Walk 5% faster' },
+  { id:'gown',   icon:'👰', name:'Evening Gown',  col:'#e84393', price:520, perk:'+8% work pay & +2❤', dress:true },
 ];
 const SALON_HAIR_PRICE = 50, SALON_STYLE_PRICE = 75;
+
+/* ---------------- job mini-games ---------------- */
+/* type: 'timing' (stop a sweeping marker in the zone, best of 3),
+         'mash'   (tap fast to fill a meter before time runs out),
+         'sequence' (repeat a shown pattern)                          */
+const MINIGAMES = {
+  pour:     { name:'Perfect Pour',     icon:'☕', type:'timing',   tip:'Tap when the marker hits the green!' },
+  rush:     { name:'Rush Hour',        icon:'🏃', type:'mash',     tip:'Tap fast to fill every order!' },
+  plate:    { name:'Plate It',         icon:'🍽️', type:'timing',   tip:'Stop the marker in the green to plate it!' },
+  recipe:   { name:'Follow the Recipe',icon:'📖', type:'sequence', tip:'Repeat the recipe steps in order!' },
+  reps:     { name:'Pump the Reps',    icon:'💪', type:'mash',     tip:'Tap fast to crush your set!' },
+  form:     { name:'Perfect Form',     icon:'🧘', type:'timing',   tip:'Time it right for perfect form!' },
+  debug:    { name:'Squash the Bugs',  icon:'🐛', type:'sequence', tip:'Repeat the pattern to fix the code!' },
+  ship:     { name:'Ship On Time',     icon:'🚀', type:'timing',   tip:'Hit the green to ship it!' },
+  stroke:   { name:'The Brushstroke',  icon:'🖌️', type:'timing',   tip:'Land the stroke in the green!' },
+  palette:  { name:'Match the Palette',icon:'🎨', type:'sequence', tip:'Repeat the color order!' },
+  diagnose: { name:'Diagnose',         icon:'🩺', type:'sequence', tip:'Recall the symptoms in order!' },
+  steady:   { name:'Steady Hands',     icon:'🤲', type:'timing',   tip:'Hold steady — stop in the green!' },
+};
+
+/* ---------------- stimulants (energy for happiness) ---------------- */
+const STIMULANTS = [
+  { id:'coffee', icon:'☕', name:'Coffee To-Go', price:10,  energy:25, fun:-5,  desc:'Quick pick-me-up' },
+  { id:'edrink', icon:'🥤', name:'Energy Drink', price:25,  energy:45, fun:-12, desc:'Wings, basically' },
+  { id:'focus',  icon:'💊', name:'Focus Pills',  price:55,  energy:70, fun:-22, social:-8, desc:'Grind now, crash later' },
+  { id:'allnt',  icon:'🌙', name:'All-Nighter',  price:90,  energy:95, fun:-30, social:-12, desc:'Sleep is for the weak' },
+];
 
 /* ---------------- tiered home upgrades ---------------- */
 const HOME_UPGRADES = [

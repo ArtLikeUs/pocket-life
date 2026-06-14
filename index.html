@@ -11,7 +11,7 @@
 <meta name="description" content="Pocket Life — a tiny life sim for your pocket.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
-<link rel="stylesheet" href="style.css?v=8">
+<link rel="stylesheet" href="style.css?v=10">
 <title>Pocket Life</title>
 </head>
 <body>
@@ -21,6 +21,7 @@
     <div id="clock"><b>Day 1</b><br>08:00</div>
     <div id="rightTop">
       <div id="coins">💰 500</div>
+      <button id="pauseBtn">⏸</button>
       <button id="speedBtn">▶︎ 1×</button>
     </div>
   </header>
@@ -45,6 +46,13 @@
 <!-- contextual bottom sheet -->
 <div id="sheetWrap"><div id="sheetBack"></div><div id="sheet"></div></div>
 
+<!-- job mini-game overlay -->
+<div id="mgOverlay"></div>
+<!-- level-up popup overlay -->
+<div id="levelOverlay"></div>
+<!-- pause overlay -->
+<div id="pauseOverlay"><div class="pauseBox">⏸<br><span>Paused</span><br><small>tap ▶️ to resume</small></div></div>
+
 <!-- generic modal (shop / quests / family / save) -->
 <div class="modal" id="genModal"><div class="card" id="genCard"></div></div>
 
@@ -67,6 +75,8 @@
     <canvas id="previewCv"></canvas>
     <label>Name</label>
     <input type="text" id="nameInput" maxlength="12" value="Alex" autocomplete="off">
+    <label>Gender</label>
+    <div class="pillrow" id="genderSw"></div>
     <label>Skin tone</label>
     <div class="swatches" id="skinSw"></div>
     <label>Hair color</label>
@@ -80,8 +90,8 @@
   </div>
 </div>
 
-<script src="data.js?v=8"></script>
-<script src="engine.js?v=8"></script>
+<script src="data.js?v=10"></script>
+<script src="engine.js?v=10"></script>
 <script>
   // wire UI buttons to engine
   document.getElementById('outBtn').addEventListener('click', () => Game.toggleOut());
@@ -89,6 +99,8 @@
   document.getElementById('shopBtn').addEventListener('click', () => Game.openShop());
   document.getElementById('lifeBtn').addEventListener('click', () => Game.openFamily());
   document.getElementById('speedBtn').addEventListener('click', () => Game.toggleSpeed());
+  document.getElementById('pauseBtn').addEventListener('click', () => Game.togglePause());
+  document.getElementById('pauseOverlay').addEventListener('click', () => Game.togglePause());
   document.getElementById('newLifeBtn').addEventListener('click', () => Game.showCreate());
   document.getElementById('loadCodeLink').addEventListener('click', () => {
     const code = prompt('Paste your transfer code:');

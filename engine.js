@@ -26,7 +26,8 @@ let cam = {x:0, y:0};
 let path = [], pending = null, action = null, facing='S', walkT=0;
 let npcSprites = [];                // town npc runtime
 let parts = [];                     // particles
-let speed = 1, paused = false, transition = 0, transitionTo = null;
+let speed = 1, paused = false, userPaused = false, transition = 0, transitionTo = null;
+let lastTapT = 0, lastTapX = 0, lastTapY = 0;   // for double-tap-to-move
 let lastFootEvt = 0;
 
 /* ---------------- audio (tiny synth, no assets) ---------------- */
@@ -540,16 +541,32 @@ function drawPerson(px,py,look,dir,phase,scaleP){
   rr(px-8*sp, py-7*sp-bodyH, 16*sp, bodyH, 6, shirt); ctx.strokeStyle=COL.outline; ctx.lineWidth=1.4; ctx.stroke();
   // arms hint
   ctx.fillStyle=shade(shirt,0.85); rr(px-9*sp,py-7*sp-bodyH+3,3*sp,9*sp,2,shade(shirt,0.85)); rr(px+6*sp,py-7*sp-bodyH+3,3*sp,9*sp,2,shade(shirt,0.85));
+  // skirt / dress (flares over the legs)
+  if(look.dress){
+    ctx.fillStyle=shirt; ctx.beginPath();
+    ctx.moveTo(px-7*sp,py-9*sp); ctx.lineTo(px+7*sp,py-9*sp);
+    ctx.lineTo(px+12*sp,py-0.5*sp); ctx.lineTo(px-12*sp,py-0.5*sp); ctx.closePath();
+    ctx.fill(); ctx.strokeStyle=COL.outline; ctx.lineWidth=1.4; ctx.stroke();
+    ctx.fillStyle=shade(shirt,1.12); ctx.fillRect(px-1*sp,py-9*sp,2*sp,8*sp);
+  }
   // head
   const hy=py-7*sp-bodyH-7*sp;
   rr(px-8*sp, hy-8*sp, 16*sp, 16*sp, 7, skin); ctx.strokeStyle=COL.outline; ctx.lineWidth=1.4; ctx.stroke();
   // hair
   ctx.fillStyle=hair;
-  if(dir==='N'){ rr(px-8*sp,hy-8*sp,16*sp,12*sp,6,hair); }
-  else {
+  if(style===6){ /* bald — tiny shine, no hair */ if(dir!=='N'){ ctx.fillStyle='rgba(255,255,255,.12)'; ctx.beginPath(); ctx.arc(px-2*sp,hy-5*sp,3*sp,0,7); ctx.fill(); } }
+  else if(dir==='N'){
+    rr(px-8*sp,hy-8*sp,16*sp,12*sp,6,hair);
+    if(style===4){ rr(px-3*sp,hy+2*sp,6*sp,14*sp,3,hair); }                 // ponytail down the back
+    if(style===1||style===3){ rr(px-8*sp,hy-8*sp,16*sp,16*sp,6,hair); }      // long/bob fuller from behind
+    if(style===5){ ctx.beginPath(); ctx.arc(px-6*sp,hy-7*sp,4*sp,0,7); ctx.arc(px+6*sp,hy-7*sp,4*sp,0,7); ctx.fill(); }
+  } else {
     rr(px-8*sp,hy-8*sp,16*sp,7*sp,6,hair);
-    if(style===1){ rr(px-8*sp,hy-8*sp,4*sp,15*sp,3,hair); rr(px+4*sp,hy-8*sp,4*sp,15*sp,3,hair); } // long
+    if(style===1){ rr(px-8*sp,hy-8*sp,4*sp,16*sp,3,hair); rr(px+4*sp,hy-8*sp,4*sp,16*sp,3,hair); } // long
     if(style===2){ for(let i=0;i<4;i++){ ctx.beginPath(); ctx.moveTo(px-7*sp+i*5*sp,hy-7*sp); ctx.lineTo(px-9*sp+i*5*sp,hy-13*sp); ctx.lineTo(px-4*sp+i*5*sp,hy-8*sp); ctx.closePath(); ctx.fill(); } } // spiky
+    if(style===3){ rr(px-9*sp,hy-8*sp,5*sp,12*sp,4,hair); rr(px+4*sp,hy-8*sp,5*sp,12*sp,4,hair); rr(px-9*sp,hy+2*sp,18*sp,3*sp,2,hair); } // bob (chin-length, flared)
+    if(style===4){ rr(px+5*sp,hy-9*sp,4*sp,3*sp,2,hair); rr(px+6*sp,hy-8*sp,5*sp,13*sp,3,hair); } // ponytail to the side
+    if(style===5){ ctx.beginPath(); ctx.arc(px-6*sp,hy-9*sp,4*sp,0,7); ctx.arc(px+6*sp,hy-9*sp,4*sp,0,7); ctx.fill(); } // buns
   }
   // eyes
   if(dir!=='N'){
@@ -558,10 +575,14 @@ function drawPerson(px,py,look,dir,phase,scaleP){
     if(dir==='S'||dir==='E'||dir==='W'){
       ctx.beginPath(); ctx.arc(px-3*sp+ex*sp,hy-1*sp,1.6*sp,0,7); ctx.fill();
       ctx.beginPath(); ctx.arc(px+3*sp+ex*sp,hy-1*sp,1.6*sp,0,7); ctx.fill();
+      if(look.lashes){ ctx.strokeStyle=COL.outline; ctx.lineWidth=1;
+        ctx.beginPath(); ctx.moveTo(px-5*sp+ex*sp,hy-2.5*sp); ctx.lineTo(px-3.5*sp+ex*sp,hy-1.8*sp);
+        ctx.moveTo(px+5*sp+ex*sp,hy-2.5*sp); ctx.lineTo(px+3.5*sp+ex*sp,hy-1.8*sp); ctx.stroke(); }
     }
   }
 }
-function playerLook(){ return {skin:S.skin, shirt:S.shirt, hair:S.hair, style:S.hairStyle}; }
+function playerLook(){ return {skin:S.skin, shirt:S.shirt, hair:S.hair, style:S.hairStyle, dress:isDressOutfit(S.outfit), lashes:S.gender==='f'}; }
+function isDressOutfit(id){ const o=OUTFITS.find(x=>x.id===id); return !!(o&&o.dress); }
 
 function drawActors(){
   // npcs (town)
@@ -688,6 +709,7 @@ function draw(){
   if(scene.type==='town') drawBuildings();
   drawFurniture();
   drawActors();
+  drawMoveHint();
   drawParts();
   const na=nightAlpha(); if(na>0){ ctx.fillStyle='rgba(16,18,52,'+na+')'; ctx.fillRect(0,0,vw,vh); }
   if(transition>0){ ctx.fillStyle='rgba(8,6,16,'+transition+')'; ctx.fillRect(0,0,vw,vh); }
@@ -699,13 +721,51 @@ function draw(){
 function mood(){ const n=S.needs; return (n.hunger+n.energy+n.hygiene+n.bladder+n.fun+n.social)/6; }
 function moodEmoji(){ const m=mood(); return m>=78?'😄':m>=58?'🙂':m>=38?'😐':m>=20?'☹️':'😫'; }
 
+let levelQueue=[];
 function addXP(n){
   if(S.career==='artist') n=Math.round(n*1.25);
   S.xp+=n;
   let need=80+S.level*40;
-  while(S.xp>=need){ S.xp-=need; S.level++; SFX.level();
-    burst(S.px-cam.x,S.py-cam.y-30,'confetti'); toast('⭐ Level '+S.level+'!');
-    need=80+S.level*40; }
+  while(S.xp>=need){ S.xp-=need; S.level++; onLevelUp(S.level); need=80+S.level*40; }
+}
+const LEVEL_PERKS=['+1 Charisma ✨','+1 Stamina 💪','+1 Wit 🧠','+1 Charm 💗','+1 Grit 🔥','+1 Focus 🎯','+1 Luck 🍀','+1 Style 👑'];
+function onLevelUp(lv){
+  SFX.level();
+  const milestone = lv%10===0;
+  const coins = milestone ? lv*45 : 30 + lv*8;
+  addCoins(coins);
+  let perk = LEVEL_PERKS[(lv-1)%LEVEL_PERKS.length];
+  let gift = '';
+  if(milestone){
+    if(!S.milestones.includes(lv)) S.milestones.push(lv);
+    gift = milestoneReward(lv);
+  }
+  levelQueue.push({lv, coins, milestone, perk, gift});
+  if(levelQueue.length===1) showNextLevelUp();
+}
+function milestoneReward(lv){
+  if(lv===10){ if(!S.wardrobe.includes('sunny')) S.wardrobe.push('sunny'); return '🎁 Free outfit: Sunny Tee'; }
+  if(lv===20){ S.vehicles=S.vehicles||[]; if(!S.vehicles.includes('bike')) S.vehicles.push('bike'); return '🎁 Free Bike'; }
+  if(lv===30){ S.gifts.ring=(S.gifts.ring||0)+1; return '🎁 Free Ring 💍'; }
+  if(lv===40){ S.vehicles=S.vehicles||[]; if(!S.vehicles.includes('car')) S.vehicles.push('car'); return '🎁 Free Car'; }
+  if(lv===50){ if(S.homeTier<1){ S.homeTier=1; if(scene&&scene.type==='home') buildHome(); } return '🎁 Free home upgrade!'; }
+  return '🎁 Big milestone bonus';
+}
+function showNextLevelUp(){
+  const it=levelQueue[0]; if(!it){ paused=false; const ov=el('levelOverlay'); if(ov) ov.classList.remove('show'); return; }
+  const ov=el('levelOverlay'); if(!ov){ levelQueue.shift(); showNextLevelUp(); return; }
+  paused=true;
+  ov.innerHTML =
+    `<div class="lvlCard ${it.milestone?'milestone':''}">`
+    + `<div class="lvlRing">${it.milestone?'🏆':'⭐'}</div>`
+    + `<h2>${it.milestone?'Milestone — Level '+it.lv+'!':'Level '+it.lv+'!'}</h2>`
+    + `<div class="lvlPerk">${it.perk}</div>`
+    + `<div class="lvlReward">+${it.coins}💰${it.gift?'<br>'+it.gift:''}</div>`
+    + `<button class="bigbtn" id="lvlGo">${it.milestone?'Awesome!':'Continue'}</button>`
+    + `</div>`;
+  ov.classList.add('show');
+  burst(vw/2, vh/3, it.milestone?'confetti':'spark');
+  el('lvlGo').onclick=()=>{ levelQueue.shift(); SFX.good(); updateHUDNow(); save(); showNextLevelUp(); };
 }
 function addCoins(n){ S.coins+=n; const c=el('coins'); c.classList.add('bump'); setTimeout(()=>c.classList.remove('bump'),160); }
 function spend(n){ if(S.coins<n){ toast("Not enough coins 💰"); SFX.err(); return false; } S.coins-=n; return true; }
@@ -735,7 +795,7 @@ function tick(dt){
     if(S.career==='doctor') rate*=0.85;                                  // career perks
     if(S.career==='artist'&&d.k==='fun') rate*=0.7;
     if(S.career==='trainer'&&d.k==='energy') rate*=0.85;
-    if(S.outfit==='hoodie'&&d.k==='fun') rate*=0.9;                      // outfit perk
+    if(d.k==='fun'){ const fm={hoodie:0.9, floral:0.88}[S.outfit]; if(fm) rate*=fm; } // outfit perk
     if(decorLv&&(d.k==='fun'||d.k==='social')) rate*=(decorLv>=2?0.65:0.75); // decor tier
     if(S.partner&&d.k==='social') rate*=0.7;
     n[d.k]=clamp(n[d.k]-rate/60*dtMin,0,100);
@@ -781,7 +841,7 @@ function wakeUp(){ finishAction(); SFX.good(); qprogress('sleep'); toast('☀️
 
 function moveSim(dt){
   if(!path.length){ if(pending){ const fn=pending; pending=null; fn(); } return; }
-  const baseSp=T*3.6*(S.outfit==='sporty'?1.15:1);
+  const baseSp=T*3.6*({sporty:1.15, skirt:1.10, romper:1.05}[S.outfit]||1);
   const vmult=(scene.type==='town'&&S.vehicle)?({bike:1.6,car:2.2,limo:2.6}[S.vehicle]||1):1;
   const sp=baseSp*(speed>1?1.5:1)*vmult;
   let dist=sp*dt;
@@ -1056,7 +1116,7 @@ function npcSocial(id,kind,fx,dur,romantic){
   if(S.needs.energy<5){ toast('Too tired to socialize ⚡'); SFX.err(); return; }
   const def=NPCS.find(n=>n.id===id);
   action={kind:'timed', icon:romantic?'💘':'💬', label:'With '+def.name, fx, total:dur, left:dur,
-    done:()=>{ const amt=(romantic?9:6) + (kind==='compliment'?2:0) + (S.outfit==='dress'?2:0); rel(id, amt);
+    done:()=>{ const amt=(romantic?9:6) + (kind==='compliment'?2:0) + ({dress:2,gown:2,blouse:1}[S.outfit]||0); rel(id, amt);
       if(romantic){ S.rels[id].romance=true; burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); }
       else { burst(S.px-cam.x,S.py-cam.y-30,'spark', CHAT_LINES[Math.floor(Math.random()*CHAT_LINES.length)].split(' ').pop()); SFX.good(); }
       S.stats.social=(S.stats.social||0)+1; qprogress('social'); addXP(8);
@@ -1149,18 +1209,20 @@ function showGym(){
 }
 function shiftPay(){
   const c=CAREERS.find(x=>x.id===S.career);
-  let pay=c?Math.round(c.pay*(1+0.35*(S.jobLvl-1))):120;
-  if(S.outfit==='suit') pay=Math.round(pay*1.05);
+  let pay=c?Math.round(c.pay*(1+0.5*(S.jobLvl-1))):120;   // pay rises steeply with rank
+  const opay={suit:1.05, gown:1.08}[S.outfit]; if(opay) pay=Math.round(pay*opay);
   if(S.vehicle==='limo') pay=Math.round(pay*1.1);
+  if(S.degree) pay=Math.round(pay*1.2);                    // college bonus (wave 2 hook)
   return pay;
 }
+function shiftMinutes(){ return 300 + 60*Math.min(S.jobLvl,5); }   // higher rank = longer shift
 function showWorkSheet(){
   if(!S.career){ showCareerBoard(true); return; }
   sheetActions={};
   const c=CAREERS.find(x=>x.id===S.career);
   let body=sheetHead(c.icon,'Office — '+jobTitle(),c.perk);
-  body+=`<p style="font-size:12px;color:#bdb6d6;margin:6px 2px">A shift pays ~${shiftPay()}💰. End shifts in a good mood — 2 in a row earns a promotion (rank ${S.jobLvl}/${RANKS.length}).</p>`;
-  body+=item('💼','Start a shift','6 in-game hours · ~'+shiftPay()+'💰','',`data-a="go"`);
+  body+=`<p style="font-size:12px;color:#bdb6d6;margin:6px 2px">A shift pays ~${shiftPay()}💰 over ${Math.round(shiftMinutes()/60)}h. There's a quick task you can play for <b style="color:#5ee07a">+25% pay</b>. End shifts happy — 2 good shifts in a row = promotion (rank ${S.jobLvl}/${RANKS.length}: more pay, longer hours).</p>`;
+  body+=item('💼','Start a shift','Play a task for +25%, or skip','',`data-a="go"`);
   sheetActions.go=()=>{ closeSheet(); beginWork(); };
   body+=item('📋','Career board','Switch careers (rank resets)','',`data-a="board"`);
   sheetActions.board=()=>showCareerBoard(false);
@@ -1190,24 +1252,107 @@ function beginWork(){
   const hour=Math.floor(S.minutes/60)%24;
   if(hour<7||hour>17){ toast('Office hours are 7:00–17:00 😴'); SFX.err(); return; }
   if(S.needs.energy<15){ toast('Too tired to work ⚡'); SFX.err(); return; }
-  S.atWork={left:360}; toast('💼 Clocked in…'); updateAwayChip();
+  offerMinigame();
+}
+function offerMinigame(){
+  const c=CAREERS.find(x=>x.id===S.career);
+  const gid=c.games[Math.floor(Math.random()*c.games.length)];
+  const g=MINIGAMES[gid];
+  sheetActions={};
+  let body=sheetHead(g.icon,"Today's task: "+g.name,g.tip);
+  body+=`<p style="font-size:12px;color:#bdb6d6;margin:6px 2px">Complete it for a <b style="color:#5ee07a">+25% pay bonus</b> this shift — or skip and just clock in.</p>`;
+  body+=item('🎮','Play the task','+25% pay if you win',null,'data-a="play"');
+  body+=item('⏭️','Skip & clock in','No bonus, no fuss',null,'data-a="skip"');
+  sheetActions.play=()=>{ closeSheet(); playMinigame(gid, win=>runShift(win?1.25:1.0, win)); };
+  sheetActions.skip=()=>{ closeSheet(); runShift(1.0, null); };
+  openSheet(body); bindSheet();
+}
+function runShift(bonus, won){
+  S.atWork={left:shiftMinutes(), bonus};
+  if(won===true) toast('🎯 Nailed it! +25% pay this shift');
+  else if(won===false) toast("Just missed it — clocking in anyway 💼");
+  updateAwayChip();
 }
 function endWork(){
+  const bonus=(S.atWork&&S.atWork.bonus)||1;
   S.atWork=null;
   const n=S.needs;
   n.hunger=clamp(n.hunger-26,4,100); n.energy=clamp(n.energy-28,4,100); n.hygiene=clamp(n.hygiene-16,4,100);
   n.fun=clamp(n.fun-20,4,100); n.bladder=clamp(n.bladder-22,12,100); n.social=clamp(n.social+18,0,100);
-  const pay=shiftPay();
+  const pay=Math.round(shiftPay()*bonus);
   addCoins(pay); SFX.coin(); burst(S.px-cam.x,S.py-cam.y-30,'coin','+'+pay+'💰');
-  qprogress('work'); addXP(40); toast('🏁 Shift done! +'+pay+'💰');
+  qprogress('work'); addXP(40);
+  toast('🏁 Shift done! +'+pay+'💰'+(bonus>1?' (task bonus!)':''));
   if(mood()>=58){
     S.promoStreak++;
     if(S.promoStreak>=2&&S.jobLvl<RANKS.length){
       S.jobLvl++; S.promoStreak=0; SFX.level(); burst(vw/2,vh/3,'confetti');
-      toast('📈 Promoted! You are now a '+jobTitle()+' 🎉');
+      toast('📈 Promoted to '+jobTitle()+'! More pay, longer hours 🎉');
     }
   } else S.promoStreak=0;
   updateAwayChip(); save();
+}
+
+/* ----- job mini-games ----- */
+function playMinigame(gid, cb){
+  const g=MINIGAMES[gid]; const ov=el('mgOverlay');
+  if(!ov){ cb(false); return; }
+  paused=true; let done=false;
+  const finish=win=>{ if(done) return; done=true; ov.classList.remove('show'); ov.innerHTML=''; paused=false; cb(win); };
+  ov.innerHTML=`<div class="mgCard"><h3>${g.icon} ${g.name}</h3><p class="mgTip">${g.tip}</p><div id="mgArea"></div><div id="mgStatus" class="mgStatus"></div><button class="mgSkip" id="mgSkip">Give up (no bonus)</button></div>`;
+  ov.classList.add('show');
+  el('mgSkip').onclick=()=>finish(false);
+  const area=el('mgArea'), status=el('mgStatus');
+  if(g.type==='timing') mgTiming(area,status,finish);
+  else if(g.type==='mash') mgMash(area,status,finish);
+  else mgSequence(area,status,finish);
+}
+function mgTiming(area,status,finish){
+  let round=0, hits=0; const rounds=3, needed=2; let speed=1.25;
+  area.innerHTML=`<div class="mgBar"><div class="mgZone" id="mgZone"></div><div class="mgMarker" id="mgMark"></div></div><button class="mgBtn" id="mgStop">STOP</button>`;
+  const zone=el('mgZone'), mark=el('mgMark'), stop=el('mgStop');
+  let zoneL=34+Math.random()*30, zoneW=20; zone.style.left=zoneL+'%'; zone.style.width=zoneW+'%';
+  let pos=0, dir=1, raf;
+  status.textContent='Round 1/3 — STOP in the green';
+  function step(){ pos+=dir*speed; if(pos>=100){pos=100;dir=-1;} if(pos<=0){pos=0;dir=1;} mark.style.left=pos+'%'; raf=requestAnimationFrame(step); }
+  raf=requestAnimationFrame(step);
+  stop.onclick=()=>{
+    const inZone=pos>=zoneL&&pos<=zoneL+zoneW;
+    if(inZone){ hits++; mark.style.background='#5ee07a'; blip(880,0.08,'square',0.05); } else { mark.style.background='#ff5d6c'; blip(180,0.1,'sawtooth',0.04); }
+    round++;
+    if(round>=rounds){ cancelAnimationFrame(raf); setTimeout(()=>finish(hits>=needed),250); return; }
+    setTimeout(()=>{ mark.style.background='#fff'; status.textContent='Round '+(round+1)+'/3 · hits: '+hits; speed+=0.45;
+      zoneL=28+Math.random()*44; zone.style.left=zoneL+'%'; },200);
+  };
+}
+function mgMash(area,status,finish){
+  area.innerHTML=`<div class="mgMeter"><div class="mgMeterFill" id="mgFill"></div></div><button class="mgBtn big" id="mgTap">TAP!</button>`;
+  const fillEl=el('mgFill'), tap=el('mgTap');
+  let fill=0, time=5.0, last=performance.now(), raf;
+  function loop2(now){ const dt=(now-last)/1000; last=now; time-=dt; fill=Math.max(0,fill-dt*7);
+    fillEl.style.width=fill+'%'; status.textContent='⏱ '+time.toFixed(1)+'s  —  '+Math.round(fill)+'%';
+    if(fill>=100){ cancelAnimationFrame(raf); finish(true); return; }
+    if(time<=0){ cancelAnimationFrame(raf); finish(false); return; }
+    raf=requestAnimationFrame(loop2); }
+  raf=requestAnimationFrame(loop2);
+  tap.onclick=()=>{ fill=Math.min(100,fill+8); blip(560,0.025,'square',0.03); };
+}
+function mgSequence(area,status,finish){
+  const cols=['#ff6b6b','#4dabf7','#51cf66','#ffd43b'];
+  const len=3+Math.floor(Math.random()*2);
+  const seq=[]; for(let i=0;i<len;i++) seq.push(Math.floor(Math.random()*4));
+  area.innerHTML='<div class="mgPads">'+cols.map((c,i)=>`<button class="mgPad" data-i="${i}" style="background:${c}"></button>`).join('')+'</div>';
+  const pads=[...area.querySelectorAll('.mgPad')];
+  let accepting=false, idx=0, k=0;
+  status.textContent='Watch the pattern…';
+  function playSeq(){ if(k>=seq.length){ accepting=true; status.textContent='Your turn — repeat it!'; return; }
+    const p=pads[seq[k]]; p.classList.add('lit'); blip(380+seq[k]*130,0.2,'sine',0.05);
+    setTimeout(()=>{ p.classList.remove('lit'); k++; setTimeout(playSeq,200); },440); }
+  setTimeout(playSeq,500);
+  pads.forEach(p=>p.onclick=()=>{ if(!accepting) return; const i=+p.dataset.i;
+    p.classList.add('lit'); setTimeout(()=>p.classList.remove('lit'),150); blip(380+i*130,0.12,'sine',0.05);
+    if(i===seq[idx]){ idx++; if(idx>=seq.length){ accepting=false; setTimeout(()=>finish(true),200); } }
+    else { accepting=false; setTimeout(()=>finish(false),200); } });
 }
 function updateAwayChip(){ const c=el('awayChip');
   if(S.atWork){ c.classList.add('show'); c.innerHTML='💼 At work…<small>'+Math.ceil(S.atWork.left/60)+'h left · earning</small>'; }
@@ -1251,7 +1396,7 @@ function renderShop(){
   genActions={};
   let body=`<h2>🛍️ Maple Mall</h2><div class="sub">Coins: <b style="color:#ffd76a">${Math.floor(S.coins)}💰</b></div>`;
   body+=`<div class="sheetTabs">`+
-    ['homes:🏠 Homes','vehicles:🚗 Rides','style:👕 Style','decor:🛋️ Home+','gifts:🎁 Gifts'].map(t=>{ const [k,l]=t.split(':');
+    ['homes:🏠 Homes','vehicles:🚗 Rides','style:👕 Style','decor:🛋️ Home+','boosts:⚡ Boosts','gifts:🎁 Gifts'].map(t=>{ const [k,l]=t.split(':');
       return `<button class="pill ${shopTab===k?'sel':''}" data-g="tab_${k}">${l}</button>`; }).join('')+`</div>`;
   if(shopTab==='homes'){
     HOME_TIERS.forEach(h=>{ const owned=S.homeTier>=h.id; const cur=S.homeTier===h.id;
@@ -1298,11 +1443,23 @@ function renderShop(){
         body+=item(u.icon,u.name+': '+cur.name,'Fully upgraded ✨',{txt:'MAX',owned:true},'disabled');
       }
     });
+  } else if(shopTab==='boosts'){
+    body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">⚡ Instant energy — but it costs you happiness. Grind fast, just mind your peace 😵‍💫</p>`;
+    STIMULANTS.forEach(s=>{
+      const sub='+'+s.energy+' energy · '+s.fun+' fun'+(s.social?' · '+s.social+' social':'');
+      body+=item(s.icon,s.name,sub,{txt:s.price+'💰'},`data-g="stim_${s.id}"`);
+      genActions['stim_'+s.id]=()=>{ if(!spend(s.price)) return;
+        S.needs.energy=clamp(S.needs.energy+s.energy,0,100);
+        S.needs.fun=clamp(S.needs.fun+s.fun,0,100);
+        if(s.social) S.needs.social=clamp(S.needs.social+s.social,0,100);
+        SFX.coin(); burst(vw/2,vh/2,'spark','+'+s.energy+'⚡'); updateHUDNow();
+        toast(s.icon+' '+s.name+' — wired up!'); save(); renderShop(); };
+    });
   }
   body+=`<button class="closebtn" data-g="close">Done</button>`;
   genActions.tab_homes=()=>{shopTab='homes';renderShop();}; genActions.tab_vehicles=()=>{shopTab='vehicles';renderShop();};
   genActions.tab_gifts=()=>{shopTab='gifts';renderShop();}; genActions.tab_decor=()=>{shopTab='decor';renderShop();};
-  genActions.tab_style=()=>{shopTab='style';renderShop();};
+  genActions.tab_style=()=>{shopTab='style';renderShop();}; genActions.tab_boosts=()=>{shopTab='boosts';renderShop();};
   genActions.close=closeModal;
   openModal(body);
 }
@@ -1440,10 +1597,10 @@ function loadCode(code){
 /*                    STATE / PROFILES                          */
 /* ============================================================ */
 function freshState(opts){
-  const s={ v:2, name:opts.name, skin:opts.skin, shirt:opts.shirt, hair:opts.hair, hairStyle:opts.hairStyle,
+  const s={ v:3, name:opts.name, gender:opts.gender||'nb', skin:opts.skin, shirt:opts.shirt, hair:opts.hair, hairStyle:opts.hairStyle,
     scene:'home', px:0, py:0,
     needs:{hunger:82,energy:85,hygiene:80,bladder:78,fun:72,social:70},
-    coins:500, level:1, xp:0, promoStreak:0, minutes:8*60,
+    coins:500, level:1, xp:0, promoStreak:0, minutes:8*60, milestones:[],
     homeTier:0, upgrades:{}, homeLv:{bed:0,tv:0,kitchen:0,decor:0,bath:0},
     career:null, jobLvl:1, wardrobe:[], outfit:null, baseShirt:opts.shirt,
     vehicles:[], vehicle:null, gifts:{},
@@ -1465,6 +1622,8 @@ function normalize(s){
   if(typeof s.promoStreak!=='number') s.promoStreak=0;
   s.wardrobe=s.wardrobe||[]; s.outfit=s.outfit||null;
   s.baseShirt=s.baseShirt||s.shirt;
+  s.gender=s.gender||'nb'; s.milestones=s.milestones||[];
+  if(typeof s.hairStyle!=='number'||s.hairStyle<0||s.hairStyle>=HAIRSTYLES.length) s.hairStyle=0;
   if(!s.quests.length) { S=s; seedQuests(); }
   return s;
 }
@@ -1526,9 +1685,25 @@ cv.addEventListener('pointerdown',e=>{
   }
   // furniture?
   const o=scene.furnAt.get(c+','+r); if(o){ tapObject(o); return; }
-  // walk
-  if(walkable(c,r)){ SFX.tap(); goTo(c,r,null); }
+  // walk — needs a DOUBLE tap on the same spot (prevents accidental wandering)
+  if(walkable(c,r)){
+    const now=performance.now();
+    const dbl=(now-lastTapT<380)&&Math.hypot(e.clientX-lastTapX,e.clientY-lastTapY)<44;
+    lastTapT=now; lastTapX=e.clientX; lastTapY=e.clientY;
+    if(dbl){ SFX.tap(); moveHint=null; goTo(c,r,null); }
+    else { moveHint={x:(c+.5)*T,y:(r+.5)*T,life:0.9}; blip(420,0.04,'sine',0.02); }
+  }
 });
+let moveHint=null;
+function drawMoveHint(){
+  if(!moveHint) return;
+  moveHint.life-=1/60; if(moveHint.life<=0){ moveHint=null; return; }
+  const x=moveHint.x-cam.x, y=moveHint.y-cam.y, t=1-moveHint.life/0.9;
+  ctx.strokeStyle='rgba(255,232,160,'+(0.8*moveHint.life).toFixed(3)+')'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(x,y,6+t*12,0,7); ctx.stroke();
+  ctx.fillStyle='rgba(255,232,160,'+(0.9*moveHint.life).toFixed(3)+')';
+  ctx.font='700 9px -apple-system'; ctx.textAlign='center'; ctx.fillText('tap again',x,y-16); ctx.textAlign='left';
+}
 
 /* buttons (wired from index via Game.* ) */
 function toggleOut(){ if(!S||S.atWork||S.hospital||transition>0) return; SFX.tap();
@@ -1540,6 +1715,8 @@ function quickWork(){ if(!S||S.hospital||S.atWork) return; SFX.tap();
   else { toast('Head out 🚪 to reach the office 💼'); }
 }
 function toggleSpeed(){ speed=speed===1?3:1; el('speedBtn').textContent=speed===1?'▶︎ 1×':'⏩ 3×'; }
+function togglePause(){ userPaused=!userPaused; const b=el('pauseBtn'); if(b) b.textContent=userPaused?'▶️':'⏸';
+  const ov=el('pauseOverlay'); if(ov) ov.classList.toggle('show',userPaused); }
 
 /* ============================================================ */
 /*                    PROFILE / LOGIN UI                        */
@@ -1582,26 +1759,34 @@ const Profiles=(()=>{
 function showCreate(){
   el('profileModal').classList.remove('show');
   const m=el('createModal'); m.classList.add('show');
-  const pick={skin:SKINS[2], shirt:SHIRTS[1], hair:HAIRC[1], hairStyle:0};
-  const pcv=el('previewCv'); pcv.width=120; pcv.height=120;
+  const pick={gender:'f', skin:SKINS[2], shirt:SHIRTS[6], hair:HAIRC[6], hairStyle:4};
+  const pcv=el('previewCv'); pcv.width=120; pcv.height=124;
   const pctx=pcv.getContext('2d');
-  function drawPrev(){ pctx.clearRect(0,0,120,120); pctx.save(); pctx.translate(0,0);
-    // reuse drawPerson by temporarily targeting pctx: simpler manual draw
-    const x=60,y=92,sp=2.4, look=pick;
+  function rrp(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); c.fill(); }
+  function drawPrev(){ pctx.clearRect(0,0,120,124);
+    const x=60,y=96, st=pick.hairStyle, dress=pick.gender==='f'&&(st===3||st===4||st===5);
     pctx.fillStyle='rgba(0,0,0,.2)'; pctx.beginPath(); pctx.ellipse(x,y+2,16,6,0,0,7); pctx.fill();
     pctx.fillStyle='#3a3550'; pctx.fillRect(x-12,y-16,10,16); pctx.fillRect(x+2,y-16,10,16);
-    pctx.fillStyle=look.shirt; rrp(pctx,x-18,y-50,36,36,8);
-    pctx.fillStyle=look.skin; rrp(pctx,x-18,y-86,36,36,12);
-    pctx.fillStyle=look.hair; rrp(pctx,x-18,y-86,36,16,10);
-    if(look.hairStyle===1){ rrp(pctx,x-18,y-86,9,34,5); rrp(pctx,x+9,y-86,9,34,5); }
-    if(look.hairStyle===2){ for(let i=0;i<4;i++){ pctx.beginPath(); pctx.moveTo(x-14+i*9,y-72); pctx.lineTo(x-18+i*9,y-92); pctx.lineTo(x-6+i*9,y-74); pctx.closePath(); pctx.fill(); } }
+    pctx.fillStyle=pick.shirt; rrp(pctx,x-18,y-50,36,36,8);
+    if(dress){ pctx.fillStyle=pick.shirt; pctx.beginPath(); pctx.moveTo(x-15,y-22); pctx.lineTo(x+15,y-22); pctx.lineTo(x+26,y-1); pctx.lineTo(x-26,y-1); pctx.closePath(); pctx.fill(); }
+    pctx.fillStyle=pick.skin; rrp(pctx,x-18,y-86,36,36,12);
+    pctx.fillStyle=pick.hair;
+    if(st!==6){
+      rrp(pctx,x-18,y-86,36,16,10);
+      if(st===1){ rrp(pctx,x-18,y-86,9,36,5); rrp(pctx,x+9,y-86,9,36,5); }
+      if(st===2){ for(let i=0;i<4;i++){ pctx.beginPath(); pctx.moveTo(x-14+i*9,y-72); pctx.lineTo(x-18+i*9,y-92); pctx.lineTo(x-6+i*9,y-74); pctx.closePath(); pctx.fill(); } }
+      if(st===3){ rrp(pctx,x-20,y-86,11,28,5); rrp(pctx,x+9,y-86,11,28,5); rrp(pctx,x-20,y-62,40,7,3); }
+      if(st===4){ rrp(pctx,x+11,y-84,9,30,4); }
+      if(st===5){ pctx.beginPath(); pctx.arc(x-13,y-86,9,0,7); pctx.arc(x+13,y-86,9,0,7); pctx.fill(); }
+    } else { pctx.fillStyle='rgba(255,255,255,.12)'; pctx.beginPath(); pctx.arc(x-5,y-78,6,0,7); pctx.fill(); }
     pctx.fillStyle='#1d1626'; pctx.beginPath(); pctx.arc(x-7,y-66,3,0,7); pctx.arc(x+7,y-66,3,0,7); pctx.fill();
-    pctx.restore();
+    if(pick.gender==='f'){ pctx.strokeStyle='#1d1626'; pctx.lineWidth=1.5; pctx.beginPath(); pctx.moveTo(x-11,y-69); pctx.lineTo(x-8,y-67); pctx.moveTo(x+11,y-69); pctx.lineTo(x+8,y-67); pctx.stroke(); }
   }
-  function rrp(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); c.fill(); }
   drawPrev();
   function sw(elid,colors,key){ const box=el(elid); box.innerHTML=''; colors.forEach(col=>{ const b=document.createElement('button'); b.className='sw'+(pick[key]===col?' sel':''); b.style.background=col;
     b.onclick=()=>{ pick[key]=col; box.querySelectorAll('.sw').forEach(s=>s.classList.remove('sel')); b.classList.add('sel'); drawPrev(); }; box.appendChild(b); }); }
+  const gBox=el('genderSw'); gBox.innerHTML=''; GENDERS.forEach(g=>{ const b=document.createElement('button'); b.className='pill'+(pick.gender===g.id?' sel':''); b.textContent=g.icon+' '+g.label;
+    b.onclick=()=>{ pick.gender=g.id; gBox.querySelectorAll('.pill').forEach(p=>p.classList.remove('sel')); b.classList.add('sel'); drawPrev(); }; gBox.appendChild(b); });
   sw('skinSw',SKINS,'skin'); sw('shirtSw',SHIRTS,'shirt'); sw('hairSw',HAIRC,'hair');
   const hsBox=el('hairStyleSw'); hsBox.innerHTML=''; HAIRSTYLES.forEach((nm,i)=>{ const b=document.createElement('button'); b.className='pill'+(pick.hairStyle===i?' sel':''); b.textContent=nm;
     b.onclick=()=>{ pick.hairStyle=i; hsBox.querySelectorAll('.pill').forEach(p=>p.classList.remove('sel')); b.classList.add('sel'); drawPrev(); }; hsBox.appendChild(b); });
@@ -1628,7 +1813,7 @@ function begin(){
 }
 function loop(now){
   const dt=Math.min(0.05,(lastFrame? (now-lastFrame)/1000 : 0)); lastFrame=now;
-  if(S&&!paused){ moveSim(dt); tickNPCs(dt); tickHomies(dt); tick(dt); updateParts(dt); centerCam(false); }
+  if(S&&!paused&&!userPaused){ moveSim(dt); tickNPCs(dt); tickHomies(dt); tick(dt); updateParts(dt); centerCam(false); }
   if(transition>0){ transition-=dt*3.2; if(transition<=0.5&&transitionTo){ transitionTo(); transitionTo=null; } if(transition<0) transition=0; }
   draw(); updateHUD();
   requestAnimationFrame(loop);
@@ -1642,7 +1827,7 @@ setInterval(()=>{ if(S){ save(); Profiles.syncMeta(); } },6000);
 return {
   bootProfiles:()=>Profiles.show(),
   showCreate,
-  toggleOut, quickWork, toggleSpeed,
+  toggleOut, quickWork, toggleSpeed, togglePause,
   openShop, openQuests, openFamily,
   startLoop:()=>requestAnimationFrame(loop),
   _dbg:()=>({S, scene, homies, npcCount:npcSprites.length, rebuild:()=>{ if(scene.type==='home') buildHome(); else buildTown(); }}),
