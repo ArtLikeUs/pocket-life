@@ -27,7 +27,7 @@ let path = [], pending = null, action = null, facing='S', walkT=0;
 let npcSprites = [];                // town npc runtime
 let parts = [];                     // particles
 let speed = 1, paused = false, userPaused = false, transition = 0, transitionTo = null;
-let lastTapT = 0, lastTapX = 0, lastTapY = 0;   // for double-tap-to-move
+let pendingMove = null;   // tap a tile to aim, tap that same tile again to go (no timing window)
 let lastFootEvt = 0;
 
 /* ---------------- audio (tiny synth, no assets) ---------------- */
@@ -175,7 +175,7 @@ function gotoScene(type, spawnTile){
     if(type==='home') buildHome(); else buildTown();
     const sp = spawnTile || (type==='home'? homeDef().spawn : TOWN_SPAWN);
     S.px=(sp[0]+.5)*T; S.py=(sp[1]+.5)*T; S.scene=type;
-    path=[]; pending=null; action=null;
+    path=[]; pending=null; action=null; pendingMove=null;
     centerCam(true);
   };
 }
@@ -1828,6 +1828,7 @@ cv.addEventListener('pointerdown',e=>{
   const rect=cv.getBoundingClientRect();
   const wx=(e.clientX-rect.left)/scale+cam.x, wy=(e.clientY-rect.top)/scale+cam.y;
   const c=Math.floor(wx/T), r=Math.floor(wy/T);
+  const prevPending=pendingMove; pendingMove=null;   // any tap clears the aim; interactions below won't re-set it
   // npc? (forgiving: snap to nearest NPC within ~1.4 tiles of the tap)
   if(scene.type==='town'){
     let best=null, bestD=T*1.4;
@@ -1843,24 +1844,22 @@ cv.addEventListener('pointerdown',e=>{
   }
   // furniture?
   const o=scene.furnAt.get(c+','+r); if(o){ tapObject(o); return; }
-  // walk — needs a DOUBLE tap on the same spot (prevents accidental wandering)
+  // walk — tap a tile to aim (drops a marker), tap that SAME tile again to go.
+  // No timing window, so the two taps are naturally spaced and never trigger iOS double-tap zoom.
   if(walkable(c,r)){
-    const now=performance.now();
-    const dbl=(now-lastTapT<380)&&Math.hypot(e.clientX-lastTapX,e.clientY-lastTapY)<44;
-    lastTapT=now; lastTapX=e.clientX; lastTapY=e.clientY;
-    if(dbl){ SFX.tap(); moveHint=null; goTo(c,r,null); }
-    else { moveHint={x:(c+.5)*T,y:(r+.5)*T,life:0.9}; blip(420,0.04,'sine',0.02); }
+    if(prevPending && prevPending.c===c && prevPending.r===r){ SFX.tap(); goTo(c,r,null); }
+    else { pendingMove={c,r}; blip(420,0.04,'sine',0.02); }
   }
 });
-let moveHint=null;
 function drawMoveHint(){
-  if(!moveHint) return;
-  moveHint.life-=1/60; if(moveHint.life<=0){ moveHint=null; return; }
-  const x=moveHint.x-cam.x, y=moveHint.y-cam.y, t=1-moveHint.life/0.9;
-  ctx.strokeStyle='rgba(255,232,160,'+(0.8*moveHint.life).toFixed(3)+')'; ctx.lineWidth=2;
-  ctx.beginPath(); ctx.arc(x,y,6+t*12,0,7); ctx.stroke();
-  ctx.fillStyle='rgba(255,232,160,'+(0.9*moveHint.life).toFixed(3)+')';
-  ctx.font='700 9px -apple-system'; ctx.textAlign='center'; ctx.fillText('tap again',x,y-16); ctx.textAlign='left';
+  if(!pendingMove) return;
+  const x=(pendingMove.c+.5)*T-cam.x, y=(pendingMove.r+.5)*T-cam.y;
+  const pl=performance.now()/300, rad=8+2.5*Math.sin(pl);
+  ctx.strokeStyle='rgba(255,232,160,.85)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(x,y,rad,0,7); ctx.stroke();
+  ctx.fillStyle='rgba(255,232,160,.45)'; ctx.beginPath(); ctx.arc(x,y,3,0,7); ctx.fill();
+  ctx.fillStyle='rgba(255,240,190,'+(0.7+0.3*Math.sin(pl)).toFixed(2)+')';
+  ctx.font='700 9px -apple-system'; ctx.textAlign='center'; ctx.fillText('tap to go',x,y-15); ctx.textAlign='left';
 }
 
 /* buttons (wired from index via Game.* ) */
@@ -1990,6 +1989,7 @@ return {
   startLoop:()=>requestAnimationFrame(loop),
   _dbg:()=>({S, scene, homies, npcCount:npcSprites.length, rebuild:()=>{ if(scene.type==='home') buildHome(); else buildTown(); },
     enter:(bid)=>enterBuilding(bid), uni:()=>showUniversity(), biz:()=>showBusinessCenter(), school:()=>showSchool(),
-    endStudy:()=>endStudy(), bizDay:()=>{ S.atWork={biz:true,bonus:1}; endWork(); }}),
+    endStudy:()=>endStudy(), bizDay:()=>{ S.atWork={biz:true,bonus:1}; endWork(); },
+    pathLen:()=>path.length, pending:()=>pendingMove, stepSim:(n)=>{ for(let i=0;i<(n||30);i++){ moveSim(0.05); } }}),
 };
 })();

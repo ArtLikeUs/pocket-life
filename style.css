@@ -100,7 +100,7 @@ header { display:flex; align-items:center; justify-content:space-between; gap:8p
 #xpWrap { height:5px; border-radius:3px; background:rgba(255,255,255,.09); overflow:hidden; margin:0 4px; }
 #xpBar { height:100%; width:0%; border-radius:3px; background:linear-gradient(90deg,#7a5bd6,#b18cff); transition:width .4s; }
 #canvasWrap { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; position:relative; }
-canvas#cv { border-radius:18px; box-shadow:0 10px 40px rgba(0,0,0,.5); background:#101020; display:block; }
+canvas#cv { border-radius:18px; box-shadow:0 10px 40px rgba(0,0,0,.5); background:#101020; display:block; touch-action:manipulation; }
 #awayChip {
   position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
   background:rgba(20,16,38,.88); border:1px solid rgba(255,255,255,.15);
