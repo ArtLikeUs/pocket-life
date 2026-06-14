@@ -223,7 +223,25 @@ const CHAT_LINES = [
   'debated pizza toppings 🍕','shared town news 📰','complained about Mondays 😅',
   'planned a park picnic 🧺','traded gardening tips 🌱',
 ];
-const KIDNAMES = ['Mia','Leo','Zoe','Kai','Ivy','Max','Lily','Theo'];
+const KIDNAMES = ['Mia','Leo','Zoe','Kai','Ivy','Max','Lily','Theo','Nia','Eli','Luna','Finn'];
+
+/* ---------------- aging & generations ---------------- */
+const AGE_PER_DAY = 2;            // in-game years gained per in-game day (tunable)
+const START_AGE = 22;            // a new sim begins as a young adult
+const LIFE_MIN = 72, LIFE_MAX = 94;   // natural lifespan range
+const ADULT_AGE = 18, TEEN_AGE = 13, CHILD_AGE = 5, ELDER_AGE = 65;
+const LIFE_STAGES = [            // [minAge, label, emoji]
+  [0,'Baby','👶'], [CHILD_AGE,'Child','🧒'], [TEEN_AGE,'Teen','🧑'],
+  [ADULT_AGE,'Adult','🧑‍💼'], [ELDER_AGE,'Elder','🧓'],
+];
+const FAMILY_SURNAMES = ['Rivers','Holloway','Vance','Sterling','Brooks','Calderon','Ashford','Nakamura','Okafor','Delgado'];
+// 100-year legacy outcome flavor, chosen by how well you played
+const LEGACY_DESCENDANTS = {
+  great:['became mayor of the town 🏛️','founded a famous company 🏢','were celebrated artists 🎨','traveled the whole world ✈️','grew the family fortune tenfold 💎'],
+  good: ['lived happy, comfortable lives 🌳','ran the beloved family business 🏪','raised big, loving families 👨‍👩‍👧‍👦','were pillars of the community 🤝'],
+  okay: ['got by, one day at a time 🌤️','kept the old house standing 🏠','told stories of you for years 📖','dreamed of more, now and then 💭'],
+  hard: ['struggled but stayed together 🥲','scattered to find their way 🍃','sold the old house eventually 📦','remembered the hard times 🌧️'],
+};
 
 /* ---------------- food menus ---------------- */
 const FOODS_HOME = [

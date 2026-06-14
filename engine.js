@@ -150,15 +150,17 @@ let homies=[];
 function buildHomies(){
   homies=[];
   if(!scene||scene.type!=='home') return;
-  const def=homeDef();
-  if(S.partner){ const pn=npcDef(S.partner); const z=def.partnerZone;
-    homies.push({kind:'partner', id:pn.id, name:pn.name, look:{skin:pn.skin,shirt:pn.shirt,hair:pn.hair,style:pn.style},
-      px:(z.x+1+.5)*T, py:(z.y+1+.5)*T, zone:z, dir:'S', wt:0, cool:1+Math.random()*3, tpath:[], sc:1});
-  }
-  (S.kids||[]).forEach((k,i)=>{ if(k.ageDays<3) return;   // babies stay in the crib
-    const z=def.kidZone;
+  const def=homeDef(), pz=def.partnerZone, kz=def.kidZone;
+  // inactive household members (spouse + grown kids you're not currently controlling)
+  (S.members||[]).forEach((m,i)=>{ const partner=m.role==='Partner'; const z=partner?pz:kz;
+    homies.push({kind:partner?'partner':'grown', mid:m.mid, name:m.name,
+      look:{skin:m.skin,shirt:m.shirt,hair:m.hair,style:m.hairStyle,dress:isDressOutfit(m.outfit),lashes:m.gender==='f'},
+      px:(z.x+1+(i%Math.max(1,z.w-1))+.5)*T, py:(z.y+1+.5)*T, zone:z, dir:'S', wt:0, cool:1+Math.random()*3, tpath:[], sc:m.age<TEEN_AGE?0.7:1});
+  });
+  // minor kids (babies stay in the crib)
+  (S.kids||[]).forEach((k,i)=>{ if((k.age||0)<CHILD_AGE) return;
     homies.push({kind:'kid', idx:i, name:k.name, look:{skin:S.skin,shirt:k.shirt||'#ffd93d',hair:S.hair,style:0},
-      px:(z.x+1+(i%Math.max(1,z.w-1))+.5)*T, py:(z.y+1+.5)*T, zone:z, dir:'S', wt:0, cool:1+Math.random()*2, tpath:[], sc:k.ageDays>=8?0.85:0.7});
+      px:(kz.x+1+(i%Math.max(1,kz.w-1))+.5)*T, py:(kz.y+2+.5)*T, zone:kz, dir:'S', wt:0, cool:1+Math.random()*2, tpath:[], sc:k.age>=TEEN_AGE?0.85:0.7});
   });
 }
 function tickHomies(dt){
@@ -447,7 +449,7 @@ function drawFurn(t,x,y,o){
       box(x+5,y+T*1.1,T-10,T*0.7,4,'#7fc1e0'); break; }
     case 'crib': {
       box(x+3,y+4,T-6,T-8,4,'#caa15e');
-      const baby=(S.kids||[]).find(k=>k.ageDays<3);
+      const baby=(S.kids||[]).find(k=>(k.age||0)<CHILD_AGE);
       if(baby){
         rr(x+7,y+10,T-14,T-18,4,'#ffd1dc');                                 // blanket
         ctx.fillStyle=S.skin; ctx.beginPath(); ctx.arc(x+T/2,y+11,4.5,0,7); ctx.fill();
@@ -777,7 +779,7 @@ function showNextLevelUp(){
   burst(vw/2, vh/3, it.milestone?'confetti':'spark');
   el('lvlGo').onclick=()=>{ levelQueue.shift(); SFX.good(); updateHUDNow(); save(); showNextLevelUp(); };
 }
-function addCoins(n){ S.coins+=n; const c=el('coins'); c.classList.add('bump'); setTimeout(()=>c.classList.remove('bump'),160); }
+function addCoins(n){ S.coins+=n; if(S.stats) S.stats.peakCoins=Math.max(S.stats.peakCoins||0,Math.floor(S.coins)); const c=el('coins'); c.classList.add('bump'); setTimeout(()=>c.classList.remove('bump'),160); }
 function spend(n){ if(S.coins<n){ toast("Not enough coins 💰"); SFX.err(); return false; } S.coins-=n; return true; }
 
 function qprogress(ev,amt){
@@ -837,20 +839,104 @@ function tick(dt){
     const zeros=NEEDS.filter(d=>n[d.k]<=1).length;
     if(n.energy<=0.5||zeros>=3) hospitalize();
   }
-  // kids age & need attention
-  if(S.kids){ for(const k of S.kids){
-    k.t=(k.t||0)+dtMin;
-    k.happy=clamp((k.happy||60)-10*dtMin/1440,0,100);
-    if(k.t>=1440){ k.t-=1440; k.ageDays++;
-      if(k.ageDays===3){ toast('🎂 '+k.name+' grew into a child!'); SFX.level(); buildHomies(); }
-      else if(k.ageDays===8){ toast('🎂 '+k.name+' is a teen now!'); SFX.level(); buildHomies(); }
-      if(k.happy<35) toast('🥺 '+k.name+' misses you — play with them!');
-    }
-  } }
-  // town comes & goes (people move away / move in) on each new day
+  // kids' happiness ticks continuously
+  if(S.kids) for(const k of S.kids){ k.happy=clamp((k.happy||60)-10*dtMin/1440,0,100); }
+  // each new day: everyone ages, town turns over
   const today=Math.floor(S.minutes/1440)+1;
-  if(today>(S.lastDay||today)){ S.lastDay=today; townDayEvents(); }
+  if(today>(S.lastDay||today)){ const days=today-S.lastDay; S.lastDay=today; ageEveryone(days); townDayEvents(); }
 }
+function ageEveryone(days){
+  const inc=AGE_PER_DAY*days;
+  S.age=(S.age||START_AGE)+inc;
+  for(const m of (S.members||[])) m.age=(m.age||START_AGE)+inc;
+  const grown=[];
+  for(const k of (S.kids||[])){ const before=k.age||0; k.age=before+inc;
+    if(before<CHILD_AGE&&k.age>=CHILD_AGE){ toast('🎂 '+k.name+' is a child now! 🧒'); SFX.level(); }
+    if(before<TEEN_AGE&&k.age>=TEEN_AGE){ toast('🎂 '+k.name+' is a teen now! 🧑'); SFX.level(); }
+    if(k.age>=ADULT_AGE) grown.push(k);
+  }
+  for(const k of grown){ S.kids=S.kids.filter(x=>x!==k);
+    S.members.push(makeMember({name:k.name,skin:S.skin,shirt:k.shirt||'#7fc1e0',hair:S.hair,style:0,gender:k.gender||'nb'},'Child',k.age));
+    toast('🎓 '+k.name+' grew up! Live as them anytime — 👪 Life › Family.'); SFX.good();
+  }
+  if(scene&&scene.type==='home') buildHomies();
+  checkDeaths();
+}
+function checkDeaths(){
+  for(const m of (S.members||[]).slice()){
+    if(m.age>=m.lifespan || (m.age>=70 && Math.random()<0.04)){
+      S.members=S.members.filter(x=>x!==m);
+      if(m.role==='Partner') S.partner=null;
+      toast('🕯️ '+m.name+' passed away at '+Math.floor(m.age)+'. Rest well.');
+      if(scene&&scene.type==='home') buildHomies();
+    }
+  }
+  if(!S._ending && (S.age>=S.lifespan || (S.age>=70 && Math.random()<0.045))){ S._ending=true; setTimeout(endOfLife,400); }
+}
+function trackPeak(){ if(!S.stats) S.stats={}; S.stats.peakCoins=Math.max(S.stats.peakCoins||0, Math.floor(S.coins)); }
+function endOfLife(){
+  paused=true; closeSheet();
+  const heirs=(S.members||[]).filter(m=>m.age>=TEEN_AGE);
+  let body=`<div class="lvlCard" style="max-width:340px">`
+    +`<div class="lvlRing" style="background:radial-gradient(circle,#6c5a8a,#3a2f55)">🕯️</div>`
+    +`<h2>${S.name}'s time has come</h2>`
+    +`<div class="lvlPerk">Lived to ${Math.floor(S.age)} · the ${S.surname} family, gen ${S.generation}</div>`
+    +`<div class="lvlReward" style="font-size:13px;color:#bdb6d6;font-weight:500;margin:6px 0 12px">Every life ends. How will this one be remembered?</div>`;
+  if(heirs.length){
+    body+=`<div style="font-size:12px;color:#bdb6d6;margin-bottom:6px">Carry on through your lineage:</div>`;
+    heirs.forEach(h=>{ body+=`<button class="bigbtn" style="margin-top:8px;background:linear-gradient(135deg,#7a5bd6,#5b6bd6);color:#fff" data-eol="reborn_${h.mid}">🌱 Live on as ${h.name} (${Math.floor(h.age)}, ${h.role})</button>`; });
+  }
+  body+=`<button class="bigbtn" style="margin-top:10px" data-eol="passon">🕊️ Pass on — see the family's 100-year legacy</button>`;
+  body+=`</div>`;
+  const ov=el('levelOverlay'); ov.innerHTML=body; ov.classList.add('show');
+  ov.querySelectorAll('[data-eol]').forEach(b=>{ b.onclick=()=>{ const a=b.dataset.eol;
+    if(a==='passon') passOn(); else rebirth(a.slice(7)); }; });
+}
+function rebirth(mid){
+  const idx=(S.members||[]).findIndex(m=>m.mid===mid); if(idx<0){ passOn(); return; }
+  const heir=S.members[idx];
+  for(const f of PERSONAL){ if(heir[f]!==undefined) S[f]=heir[f]; }
+  S.mid=heir.mid; S.role='You'; S.members.splice(idx,1);
+  S.generation=(S.generation||1)+1; S._ending=false;
+  S.coins=(S.coins||0)+800;   // a modest inheritance
+  buildNeedsUI(); if(scene&&scene.type==='home') buildHomies();
+  el('levelOverlay').classList.remove('show'); paused=false; updateHUDNow(); save();
+  SFX.level(); burst(vw/2,vh/3,'confetti');
+  toast('🌱 The '+S.surname+' line lives on — you now play as '+S.name+', generation '+S.generation+'.');
+}
+function legacyStory(){
+  const peak=Math.max((S.stats&&S.stats.peakCoins)||0, Math.floor(S.coins||0));
+  const friends=Object.values(S.rels||{}).filter(r=>r.rel>=50).length;
+  const kidsCount=(S.kids||[]).length + (S.members||[]).filter(m=>m.role==='Child').length;
+  let score=Math.min(40,peak/250)+Math.min(22,(S.level||1)*1.2)+kidsCount*6+friends*4;
+  if(S.partner) score+=10; if(S.degree) score+=6; if(S.business&&S.business.level>=3) score+=10;
+  const tier= score>=70?'great':score>=45?'good':score>=22?'okay':'hard';
+  const wealth= peak>8000?'amassed a small fortune':peak>2500?'lived comfortably':peak>800?'made ends meet':'scraped by';
+  const work= S.business?('built '+((BUSINESSES.find(b=>b.id===S.business.id)||{}).name||'a business')+' into a name people knew'):
+              S.career?('rose to become a '+jobTitle().replace('🎓 ','')):'never quite settled on a calling';
+  const love= S.partner?('shared a life with '+((npcDef(S.partner)||{}).name||'a sweetheart')):'walked their own path';
+  const family= kidsCount?('raised '+kidsCount+' child'+(kidsCount>1?'ren':'')):'had no children';
+  const d=LEGACY_DESCENDANTS[tier], pick=()=>d[Math.floor(Math.random()*d.length)];
+  return { tier, lines:[
+    `${S.name} ${S.surname} lived to ${Math.floor(S.age)}, and ${wealth}.`,
+    `They ${work}, ${love}, and ${family}.`,
+    `Over the next 100 years, the ${S.surname} family ${pick()}, ${pick()}, and ${pick()}.`,
+    tier==='great'?'A legacy the whole town would remember. 🌟':tier==='good'?'A good life, warmly remembered. 🌳':tier==='okay'?'An ordinary life, quietly treasured. 🕊️':'A hard road — but the family endured. 🕯️',
+  ]};
+}
+function passOn(){
+  const st=legacyStory();
+  const body=`<div class="lvlCard ${st.tier==='great'?'milestone':''}" style="max-width:350px">`
+    +`<div class="lvlRing" style="background:radial-gradient(circle,#caa15e,#6c5a2f)">📜</div>`
+    +`<h2>The ${S.surname} Legacy</h2>`
+    +st.lines.map(l=>`<div style="font-size:13.5px;line-height:1.5;color:#e6e1f5;margin:8px 4px">${l}</div>`).join('')
+    +`<button class="bigbtn" style="margin-top:16px" data-eol2="new">🌱 Begin a new life</button>`
+    +`</div>`;
+  const ov=el('levelOverlay'); ov.innerHTML=body; ov.classList.add('show');
+  burst(vw/2,vh/3, st.tier==='great'?'confetti':'spark');
+  ov.querySelector('[data-eol2]').onclick=()=>{ el('levelOverlay').classList.remove('show'); paused=false; newLifeSameProfile(); };
+}
+function newLifeSameProfile(){ S=null; showCreate(true); }
 function townDayEvents(){
   const ALL=NPCS.concat(ARRIVAL_NAMES).map(n=>n.id);
   // a departure (never your partner, never close friends ≥80❤)
@@ -1101,11 +1187,11 @@ function drawCensor(){
 function showKidSheet(idx){
   const k=S.kids[idx]; if(!k) return;
   sheetActions={};
-  const stage=k.ageDays>=8?'Teen':'Child';
+  const stage=(k.age||0)>=TEEN_AGE?'Teen':'Child';
   const eduTag = k.graduated?' · 🎓 graduated':(k.grade?' · grade '+k.grade+'/'+SCHOOL.grades:'');
-  let body=sheetHead(k.ageDays>=8?'🧑':'🧒', k.name, stage+' · Happy '+Math.round(k.happy||50)+'% · age '+k.ageDays+'d'+eduTag);
+  let body=sheetHead((k.age||0)>=TEEN_AGE?'🧑':'🧒', k.name, stage+' · Happy '+Math.round(k.happy||50)+'% · age '+Math.floor(k.age||0)+'y'+eduTag);
   const add=(icon,title,sub,id,fn)=>{ body+=item(icon,title,sub,null,`data-a="${id}"`); sheetActions[id]=fn; };
-  if(k.ageDays>=3 && !k.graduated){
+  if((k.age||0)>=CHILD_AGE && !k.graduated){
     add(k.atSchool?'⏳':'🏫', k.atSchool?'At school…':'Send to school', k.atSchool?'In class right now':'Grade '+(k.grade||0)+'/'+SCHOOL.grades+' · just like a job','sch',()=>{ closeSheet(); sendKidToSchool(idx); });
   }
   add('🥏','Play together','+fun for you both','p',()=>{
@@ -1213,22 +1299,24 @@ function propose(id){
   if(!(S.gifts&&S.gifts.ring>0)){ toast('You need a 💍 ring (Mall)'); SFX.err(); return; }
   S.gifts.ring--; S.partner=id; S.rels[id].rel=Math.max(S.rels[id].rel,80); S.rels[id].romance=true;
   npcSprites=npcSprites.filter(sp=>sp.def.id!==id);   // they move in with you
+  const pn=npcDef(id); if(!(S.members||[]).some(m=>m.role==='Partner')){ S.members.push(makeMember(pn,'Partner',S.age)); }
   buildHomies();
   burst(S.px-cam.x,S.py-cam.y-30,'confetti'); SFX.level(); qprogress('partner');
-  addXP(60); toast('💍 '+npcDef(id).name+' said YES! They moved in 🏡💞'); closeSheet(); refreshLifeDot(); save();
+  addXP(60); toast('💍 '+pn.name+' said YES! They moved in 🏡💞'); closeSheet(); refreshLifeDot(); save();
 }
 function tryBaby(id){
   if(S.kids.length>=4){ toast('Your home is full!'); return; }
   if(S.homeTier<1){ toast('You need a bigger home for a baby — visit 🛍️ the Mall! 🏡'); SFX.err(); closeSheet(); return; }
-  if(S.kids.some(k=>k.ageDays<3)){ toast('The crib is already busy 👶'); SFX.err(); return; }
+  if(S.kids.some(k=>(k.age||0)<CHILD_AGE)){ toast('The crib is already busy 👶'); SFX.err(); return; }
   const name=KIDNAMES[Math.floor(Math.random()*KIDNAMES.length)];
-  S.kids.push({name, ageDays:0, t:0, happy:60, shirt:SHIRTS[Math.floor(Math.random()*SHIRTS.length)]});
+  S.kids.push({name, age:0, happy:60, grade:0, gender:Math.random()<0.5?'f':'m', shirt:SHIRTS[Math.floor(Math.random()*SHIRTS.length)]});
   buildHomies();
   burst(S.px-cam.x,S.py-cam.y-30,'confetti'); SFX.level();
   addXP(50); toast('👶 Welcome baby '+name+'! Find them at home 🏠'); closeSheet(); refreshLifeDot(); save();
 }
 function breakup(id){ if(!confirm('Break up with '+npcDef(id).name+'?')) return;
-  S.partner=null; S.rels[id].rel=Math.max(0,S.rels[id].rel-30); S.rels[id].romance=false; toast('💔 You broke up.'); closeSheet(); save(); }
+  S.partner=null; S.members=(S.members||[]).filter(m=>m.role!=='Partner'); buildHomies();
+  S.rels[id].rel=Math.max(0,S.rels[id].rel-30); S.rels[id].romance=false; toast('💔 You broke up.'); closeSheet(); save(); }
 
 /* ----- buildings (town doors) ----- */
 function enterBuilding(bid){
@@ -1287,12 +1375,12 @@ function endStudy(){
 /* ----- school (kids) ----- */
 function showSchool(){
   sheetActions={};
-  const schoolKids=(S.kids||[]).filter(k=>k.ageDays>=3 && k.grade<SCHOOL.grades);
+  const schoolKids=(S.kids||[]).filter(k=>(k.age||0)>=CHILD_AGE && k.grade<SCHOOL.grades);
   let body=sheetHead('🏫','Town School', SCHOOL.desc);
   if(!S.kids||!S.kids.length){ body+=`<p style="font-size:12.5px;color:#bdb6d6;margin-top:8px">No children yet. Start a family (👪) and they'll attend here once they're old enough.</p>`; }
   else if(!schoolKids.length){ body+=`<p style="font-size:12.5px;color:#bdb6d6;margin-top:8px">Your kids are either too little or already graduated 🎓</p>`; }
   else schoolKids.forEach(k=>{ const idx=S.kids.indexOf(k); const idk='sk'+idx;
-    body+=item(k.ageDays>=8?'🧑‍🎓':'🧒',k.name,'Grade '+k.grade+'/'+SCHOOL.grades+' · '+(k.atSchool?'in class':'send to school'),{txt:'Grade '+k.grade},`data-a="${idk}"`);
+    body+=item((k.age||0)>=TEEN_AGE?'🧑‍🎓':'🧒',k.name,'Grade '+k.grade+'/'+SCHOOL.grades+' · '+(k.atSchool?'in class':'send to school'),{txt:'Grade '+k.grade},`data-a="${idk}"`);
     sheetActions[idk]=()=>{ closeSheet(); sendKidToSchool(idx); };
   });
   body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
@@ -1771,7 +1859,7 @@ function eligibleQuest(def){
   if(def.cond==='noDegree'&&S.degree) return false;
   if(def.cond==='noBiz'&&S.business) return false;
   if(def.cond==='hasBiz'&&!S.business) return false;
-  if(def.cond==='hasSchoolKid'&&!(S.kids||[]).some(k=>k.ageDays>=3)) return false;
+  if(def.cond==='hasSchoolKid'&&!(S.kids||[]).some(k=>(k.age||0)>=CHILD_AGE)) return false;
   return true;
 }
 function rerollQuest(i){
@@ -1789,14 +1877,21 @@ function refreshLifeDot(){ const any=S.quests.some(q=>q.done&&!q.claimed); el('l
 function openFamily(){ closeSheet(); lifeTab='people'; renderLife(); }
 function renderPeople(){
   genActions={};
-  let body=`<h2>👪 People</h2><div class="sub">Your partner, kids & friends.</div>`;
+  let body=`<h2>👪 People</h2><div class="sub">You're playing <b>${S.name} ${S.surname||''}</b> · ${ageLabel(S.age||START_AGE)} · gen ${S.generation||1}</div>`;
   body+=lifeTabBar();
-  // partner
-  if(S.partner){ const p=npcDef(S.partner);
-    body+=`<div class="relrow"><canvas class="ravatar" data-av="${p.id}" width="34" height="34"></canvas><div class="rinfo"><b>${p.name} <span class="tag">PARTNER</span></b><span class="meta">${Math.round(S.rels[p.id].rel)}❤ · ${S.kids.length} kid(s)</span></div></div>`; }
+  // controllable family members (switch control)
+  const ctrl=(S.members||[]);
+  if(ctrl.length){ body+=`<label>Family — live as someone else</label>`;
+    ctrl.forEach(m=>{ const can=m.age>=TEEN_AGE;
+      body+=`<div class="relrow"><div class="ravatar" style="display:flex;align-items:center;justify-content:center;font-size:18px">${stageOf(m.age)[2]}</div><div class="rinfo"><b>${m.name} <span class="tag">${m.role}</span></b><span class="meta">${ageLabel(m.age)}</span></div>`+
+        (can?`<button class="pill" data-g="sw_${m.mid}" style="padding:7px 12px">🔄 Live as</button>`:`<span class="meta">growing up</span>`)+`</div>`;
+      if(can) genActions['sw_'+m.mid]=()=>{ switchTo(m.mid); };
+    });
+  }
   // kids
-  (S.kids||[]).forEach(k=>{ const stage=k.ageDays>=8?'Teen':k.ageDays>=3?'Child':'Baby';
-    body+=`<div class="relrow"><div class="ravatar" style="display:flex;align-items:center;justify-content:center;font-size:18px">${k.ageDays>=3?'🧒':'👶'}</div><div class="rinfo"><b>${k.name} <span class="tag kid">${stage}</span></b><span class="meta">Happiness ${Math.round(k.happy||50)} · age ${k.ageDays}d</span></div></div>`; });
+  if((S.kids||[]).length) body+=`<label>Children</label>`;
+  (S.kids||[]).forEach(k=>{ const stage=(k.age||0)>=TEEN_AGE?'Teen':(k.age||0)>=CHILD_AGE?'Child':'Baby';
+    body+=`<div class="relrow"><div class="ravatar" style="display:flex;align-items:center;justify-content:center;font-size:18px">${(k.age||0)>=CHILD_AGE?'🧒':'👶'}</div><div class="rinfo"><b>${k.name} <span class="tag kid">${stage}</span></b><span class="meta">Happiness ${Math.round(k.happy||50)} · age ${Math.floor(k.age||0)}y</span></div></div>`; });
   // friends
   const friends=Object.entries(S.rels).filter(([id,r])=>r.rel>0&&id!==S.partner).sort((a,b)=>b[1].rel-a[1].rel);
   if(friends.length){ body+=`<label>Townsfolk</label>`;
@@ -1855,6 +1950,8 @@ function freshState(opts){
     career:null, jobLvl:1, wardrobe:[], outfit:null, baseShirt:opts.shirt,
     degree:false, eduCredits:0, studying:null, business:null,
     present:NPCS.map(n=>n.id), movedAway:{}, lastDay:1,
+    age:START_AGE, lifespan:Math.round(LIFE_MIN+Math.random()*(LIFE_MAX-LIFE_MIN)),
+    members:[], mid:'founder', role:'You', surname:FAMILY_SURNAMES[Math.floor(Math.random()*FAMILY_SURNAMES.length)], generation:1,
     vehicles:[], vehicle:null, gifts:{},
     rels:{}, partner:null, kids:[], quests:[], stats:{}, warned:{} };
   return s;
@@ -1881,6 +1978,18 @@ function normalize(s){
   s.studying=s.studying||null; s.business=s.business||null;
   s.present=s.present||NPCS.map(n=>n.id); s.movedAway=s.movedAway||{};
   if(typeof s.lastDay!=='number') s.lastDay=Math.floor((s.minutes||480)/1440)+1;
+  // wave 4: aging & generations
+  if(typeof s.age!=='number') s.age=START_AGE;
+  if(typeof s.lifespan!=='number') s.lifespan=Math.round(LIFE_MIN+Math.random()*(LIFE_MAX-LIFE_MIN));
+  s.members=s.members||[]; s.mid=s.mid||'founder'; s.role=s.role||'You';
+  s.surname=s.surname||FAMILY_SURNAMES[Math.floor(Math.random()*FAMILY_SURNAMES.length)];
+  if(typeof s.generation!=='number') s.generation=1;
+  s.stats=s.stats||{}; if(typeof s.stats.peakCoins!=='number') s.stats.peakCoins=Math.floor(s.coins||0);
+  // migrate an existing spouse (NPC partner) into a controllable member
+  if(s.partner && !s.members.some(m=>m.role==='Partner')){
+    const pn=(NPCS.find(n=>n.id===s.partner)); if(pn) s.members.push(makeMember(pn,'Partner',s.age));
+  }
+  for(const k of (s.kids||[])){ if(typeof k.age!=='number') k.age = k.ageDays>=8?14:k.ageDays>=3?7:1; }
   for(const k of (s.kids||[])){ if(typeof k.grade!=='number') k.grade=0; k.atSchool=k.atSchool||null; if(typeof k.eduT!=='number') k.eduT=0; }
   if(!s.quests.length) { S=s; seedQuests(); }
   return s;
@@ -1890,6 +1999,46 @@ function jobTitle(){
   if(!S.career) return S.degree?'Graduate':'Unemployed';
   const c=CAREERS.find(x=>x.id===S.career);
   return (S.degree?'🎓 ':'')+RANKS[Math.min(S.jobLvl-1,RANKS.length-1)]+' '+(c?c.name:'');
+}
+
+/* ---- generations: members, ages, control switching ---- */
+const PERSONAL=['name','gender','skin','shirt','hair','hairStyle','baseShirt','outfit','wardrobe','age','lifespan','needs','career','jobLvl','promoStreak','business','degree','eduCredits','level','xp','milestones'];
+function makeMember(look, role, age){
+  return { mid:'m'+Date.now().toString(36)+Math.floor(Math.random()*9999),
+    role, name:look.name||role, gender:look.gender||'nb',
+    skin:look.skin, shirt:look.shirt, hair:look.hair, hairStyle:(look.style!=null?look.style:look.hairStyle)||0, baseShirt:look.shirt,
+    outfit:null, wardrobe:[], age:(age!=null?age:START_AGE), lifespan:Math.round(LIFE_MIN+Math.random()*(LIFE_MAX-LIFE_MIN)),
+    needs:{hunger:80,energy:85,hygiene:80,bladder:78,fun:72,social:70},
+    career:null, jobLvl:1, promoStreak:0, business:null, degree:false, eduCredits:0, level:1, xp:0, milestones:[] };
+}
+function stageOf(age){ let s=LIFE_STAGES[0]; for(const st of LIFE_STAGES){ if(age>=st[0]) s=st; } return s; }
+function ageLabel(age){ const s=stageOf(age); return Math.floor(age)+'y · '+s[2]+' '+s[1]; }
+function switchTo(mid){
+  const idx=(S.members||[]).findIndex(m=>m.mid===mid); if(idx<0) return;
+  const target=S.members[idx];
+  if(target.age<TEEN_AGE){ toast(target.name+' is too young to control'); SFX.err(); return; }
+  const cur={}; for(const f of PERSONAL) cur[f]=S[f]; cur.mid=S.mid; cur.role=S.role;
+  for(const f of PERSONAL){ if(target[f]!==undefined) S[f]=target[f]; }
+  S.mid=target.mid; S.role=target.role;
+  S.members[idx]=cur;
+  buildNeedsUI(); if(scene&&scene.type==='home') buildHomies();
+  closeModal(); updateHUDNow(); save();
+  SFX.good(); burst(vw/2,vh/3,'spark'); toast('🔄 Now living as '+S.name+' ('+ageLabel(S.age)+')');
+}
+function showMemberSheet(mid){
+  const m=(S.members||[]).find(x=>x.mid===mid); if(!m) return;
+  sheetActions={};
+  let body=sheetHead(stageOf(m.age)[2], m.name, m.role+' · '+ageLabel(m.age));
+  const add=(icon,title,sub,id,fn,dis)=>{ body+=item(icon,title,sub,null,`data-a="${id}"${dis?' disabled':''}`); sheetActions[id]=fn; };
+  if(m.age>=TEEN_AGE){
+    add('🔄','Live as '+m.name,'Take control of their life','sw',()=>switchTo(mid));
+  } else add('🌱','Still growing up','Controllable once a teen','x0',()=>{});
+  add('💬','Spend time together','+fun +social for you','t',()=>{
+    action={kind:'timed',icon:'👨‍👧',label:'Time with '+m.name,fx:{fun:18,social:18,energy:-4},total:18,left:18,
+      done:()=>{ burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); addXP(10); toast('💞 Lovely time with '+m.name+'!'); }};
+    closeSheet(); });
+  add('✖️','Close','','x',closeSheet);
+  openSheet(body); bindSheet();
 }
 
 function save(){ if(!S||!profileId) return; try{ localStorage.setItem('pl-save-'+profileId, JSON.stringify(S)); }catch(e){} }
@@ -1911,7 +2060,7 @@ function updateHUD(){
     b.style.background=v>50?'#5ee07a':v>25?'#ffb84d':'#ff5d6c'; }
   const moodEl=document.querySelector('#who .mood'); moodEl.textContent=moodEmoji(); moodEl.classList.toggle('glow',mood()>=78);
   document.querySelector('#who .nm').textContent=S.name;
-  el('lvlBadge').textContent='Lv '+S.level+' · '+jobTitle();
+  el('lvlBadge').textContent='Lv '+S.level+' · '+Math.floor(S.age||START_AGE)+'y · '+jobTitle();
   const day=Math.floor(S.minutes/1440)+1, hh=String(Math.floor(S.minutes/60)%24).padStart(2,'0'), mm=String(Math.floor(S.minutes%60)).padStart(2,'0');
   el('clock').innerHTML='<b>Day '+day+'</b><br>'+hh+':'+mm;
   el('coins').textContent='💰 '+Math.floor(S.coins);
@@ -1941,7 +2090,7 @@ cv.addEventListener('pointerdown',e=>{
     let best=null, bestD=T*1.3;
     for(const n of homies){ const dd=Math.hypot(n.px-wx,n.py-wy); if(dd<bestD){ bestD=dd; best=n; } }
     if(best){ SFX.tap(); const tc=Math.floor(best.px/T), tr=Math.floor(best.py/T);
-      goNextTo(tc,tr,()=> best.kind==='partner'?showNPCSheet(best.id):showKidSheet(best.idx)); return; }
+      goNextTo(tc,tr,()=> best.kind==='partner'?showNPCSheet(S.partner): best.kind==='grown'?showMemberSheet(best.mid): showKidSheet(best.idx)); return; }
   }
   // furniture?
   const o=scene.furnAt.get(c+','+r); if(o){ tapObject(o); return; }
@@ -2014,7 +2163,7 @@ const Profiles=(()=>{
 })();
 
 /* creator */
-function showCreate(){
+function showCreate(replace){
   el('profileModal').classList.remove('show');
   const m=el('createModal'); m.classList.add('show');
   const pick={gender:'f', skin:SKINS[2], shirt:SHIRTS[6], hair:HAIRC[6], hairStyle:4};
@@ -2050,10 +2199,12 @@ function showCreate(){
     b.onclick=()=>{ pick.hairStyle=i; hsBox.querySelectorAll('.pill').forEach(p=>p.classList.remove('sel')); b.classList.add('sel'); drawPrev(); }; hsBox.appendChild(b); });
   el('startBtn').onclick=()=>{ const name=(el('nameInput').value.trim()||'Alex').slice(0,12);
     const meta={name,...pick}; const st=freshState(meta); S=st; seedQuests();
-    m.classList.remove('show'); Profiles.create(meta,st);
+    m.classList.remove('show');
+    if(replace && profileId){ save(); Profiles.syncMeta && Profiles.syncMeta(); begin(); }   // new life, same profile
+    else Profiles.create(meta,st);
     toast('Tap furniture to interact 👆'); setTimeout(()=>toast('Tap 🚪 Go Out to explore town'),3000);
   };
-  el('backToProfiles').onclick=()=>{ m.classList.remove('show'); Profiles.show(); };
+  el('backToProfiles').onclick=()=>{ m.classList.remove('show'); if(!replace) Profiles.show(); };
 }
 
 /* ============================================================ */
@@ -2091,6 +2242,7 @@ return {
   _dbg:()=>({S, scene, homies, npcCount:npcSprites.length, rebuild:()=>{ if(scene.type==='home') buildHome(); else buildTown(); },
     enter:(bid)=>enterBuilding(bid), uni:()=>showUniversity(), biz:()=>showBusinessCenter(), school:()=>showSchool(),
     endStudy:()=>endStudy(), bizDay:()=>{ S.atWork={biz:true,bonus:1}; endWork(); },
-    pathLen:()=>path.length, pending:()=>pendingMove, stepSim:(n)=>{ for(let i=0;i<(n||30);i++){ moveSim(0.05); } }}),
+    pathLen:()=>path.length, pending:()=>pendingMove, stepSim:(n)=>{ for(let i=0;i<(n||30);i++){ moveSim(0.05); } },
+    ageUp:(n)=>ageEveryone(n||1), die:()=>{ S.age=S.lifespan+1; checkDeaths(); }, switchTo:(mid)=>switchTo(mid), passOn:()=>passOn()}),
 };
 })();
