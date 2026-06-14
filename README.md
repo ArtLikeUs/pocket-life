@@ -46,7 +46,10 @@ Drag this folder onto [Netlify Drop](https://app.netlify.com/drop) or push to Gi
 - **School for kids** — once children are old enough they attend **Town School**, which runs like a job, advancing grade by grade until they graduate.
 - **Clothing store & salon** — Mall "Style" tab: six outfits with life perks (Sharp Suit +5% pay, Track Kit walks faster, Sunset Dress +❤ from socializing…), plus paid hair color/style changes.
 - **Tiered home upgrades** — Mall "Home+" tab: Bed, TV, Kitchen, Decor, and Bathroom each upgrade through three tiers with growing benefits and visible changes (golden King Bed blanket, bigger TV picture, fancier fridge).
-- **Relationships & family** — 6 townsfolk with chat/joke/gift/flirt/date progression. At 75❤ + a ring: propose. Your partner moves into your house; try for a baby (needs the Family House), babies sleep in the crib, grow into children (tap to play/homework/high-five), then teens.
+- **A living town** — a big scrolling map with 14 buildings, plus things to do that just pass the time and keep it fun: **Starlight Cinema** 🎬, **Pixel Arcade** 🕹️, **Town Library** 📚, **Cozy Cafe** ☕, and a park with a fountain, benches, and picnic tables.
+- **Townsfolk with jobs & perks** — every resident has an occupation (Mechanic, Stylist, Diner Chef, Shopkeeper, Gardener, Nurse). Get close to one (50❤) and their perk kicks in for real: discounts on rides, outfits, meals, gifts, home upgrades, or halved hospital bills.
+- **People come and go** — over time residents move away (for jobs, love, a fresh start…) and new faces move to town, so the place always feels alive.
+- **Relationships & family** — chat/joke/gift/flirt/date progression. At 75❤ + a ring: propose. Your partner moves into your house; try for a baby (needs the Family House), babies sleep in the crib, grow into children (tap to play/homework/high-five), then teens.
 - **WooHoo 🌹** — partners can WooHoo at the bed; the scene is fully censored Sims-style (shimmering pixel mosaic, floating hearts, "Do not disturb" sign) and boosts fun, social, and the relationship.
 - **Dopamine loop** — quests with claimable rewards (badge dot on the Life button), XP levels with confetti and job titles, coin bursts, sparkle/heart particles, tiny synth sound effects, daily pacing that favors small frequent wins.
 

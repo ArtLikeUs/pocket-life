@@ -138,61 +138,85 @@ const HOME_TIERS = [
 
 /* ---------------- town ----------------
    legend: T tree, . grass, , tall grass, p path, f flowers, w water     */
-const TOWN_MAP = [
-"TTTTTTTTTTTTTTTTTTTTTTTTTT",
-"T,......................fT",
-"T........................T",
-"T........................T",
-"T........................T",
-"T..........p....p........T",
-"T...p......p....p.....p..T",
-"T.pppppppppppppppppppppp.T",
-"T...f......p......,......T",
-"T..........p.............T",
-"T..........p.............T",
-"T..........p.............T",
-"T..p.......p......p......T",
-"T.pppppppppppppppppppppp.T",
-"T..f..............,...f..T",
-"T........................T",
-"T........................T",
-"T..www...................T",
-"T..www.........,,........T",
-"T..www...................T",
-"T...f.......f.......f....T",
-"T,...............,.......T",
-"T....,.........f.........T",
-"TTTTTTTTTTTTTTTTTTTTTTTTTT",
-"TTTTTTTTTTTTTTTTTTTTTTTTTT",
-];
+function _townHash(c,r){ let h=(c*73856093)^(r*19349663); h=(h^(h>>>13))>>>0; return h/4294967295; }
+function _buildTownMap(){
+  const W=34, H=30, m=[]; const hp=[6,13,20,26], vp=[8,16,24,30];
+  for(let r=0;r<H;r++){ let row='';
+    for(let c=0;c<W;c++){ let ch='.';
+      if(r===0||c===0||r===H-1||c===W-1) ch='T';            // tree border
+      else if(c>=3&&c<=6&&r>=22&&r<=25) ch='w';             // park pond
+      else if(hp.indexOf(r)>=0||vp.indexOf(c)>=0) ch='p';   // street grid
+      else { const h=_townHash(c,r); if(h>0.93) ch=','; else if(h>0.84) ch='f'; } // grass + scatter (walkable)
+      row+=ch; }
+    m.push(row); }
+  return m;
+}
+const TOWN_MAP = _buildTownMap();
 
 const BUILDINGS = [
   { id:'house',  label:'Your Home', sign:'🏠', x:2,  y:2, w:5, h:4, wall:'#c98c5a', roof:'#b3445a', door:[4,5] },
   { id:'nb1',    label:"Ava's House", sign:'🪴', x:9,  y:2, w:4, h:3, wall:'#8fa3c8', roof:'#51608a', door:[11,4] },
   { id:'nb2',    label:"Noah's House", sign:'🐱', x:14, y:2, w:4, h:3, wall:'#c8b18f', roof:'#7a6a4f', door:[16,4] },
   { id:'office', label:'Office', sign:'💼', x:20, y:2, w:4, h:4, wall:'#9aa3ad', roof:'#4b5563', door:[22,5] },
+  { id:'library',label:'Town Library', sign:'📚', x:26, y:2, w:5, h:3, wall:'#b89b7a', roof:'#5e4632', door:[28,4] },
   { id:'diner',  label:'Sunny Diner', sign:'🍔', x:9,  y:8, w:5, h:3, wall:'#e0a85e', roof:'#c0563f', door:[11,10] },
   { id:'mall',   label:'Maple Mall', sign:'🛍️', x:16, y:8, w:6, h:4, wall:'#b59ad0', roof:'#6c4f93', door:[18,11] },
+  { id:'cinema', label:'Starlight Cinema', sign:'🎬', x:25, y:8, w:6, h:4, wall:'#5b4a7a', roof:'#2d2348', door:[27,11] },
   { id:'gym',    label:'Flex Gym', sign:'🏋️', x:2,  y:9, w:4, h:3, wall:'#88c6a5', roof:'#3a7d5d', door:[3,11] },
+  { id:'arcade', label:'Pixel Arcade', sign:'🕹️', x:26, y:14, w:5, h:3, wall:'#c84d8f', roof:'#5e2447', door:[28,16] },
   { id:'hospital', label:'Town Hospital', sign:'🏥', x:14, y:15, w:5, h:4, wall:'#e8ecf2', roof:'#d6604f', door:[16,18] },
   { id:'school',     label:'Town School', sign:'🏫', x:2,  y:15, w:5, h:4, wall:'#e6b35a', roof:'#9a4f2f', door:[4,18] },
   { id:'university', label:'Maple University', sign:'🎓', x:20, y:14, w:5, h:4, wall:'#9aa6d0', roof:'#3a3f6e', door:[22,17] },
+  { id:'cafe',   label:'Cozy Cafe', sign:'☕', x:9,  y:22, w:4, h:3, wall:'#cf9b6a', roof:'#7a4a2a', door:[10,24] },
 ];
 const TOWN_FURN = [
-  {t:'bench',c:6,r:16},{t:'bench',c:11,r:18},{t:'bench',c:20,r:16},
-  {t:'fountain',c:8,r:15},
+  {t:'fountain',c:14,r:23},
+  {t:'bench',c:9,r:20},{t:'bench',c:19,r:22},{t:'bench',c:25,r:24},
+  {t:'picnic',c:16,r:21},{t:'picnic',c:21,r:25},
 ];
 const TOWN_SPAWN = [4,6];   // outside your front door
 const PARKED_SPOT = [7,5];  // where your vehicle waits
 
 /* ---------------- NPCs ---------------- */
 const NPCS = [
-  { id:'liam',  name:'Liam',  skin:'#e0ac69', shirt:'#e67e22', hair:'#2c1b10', style:2, anchor:[7,18],  bio:'Park regular, frisbee legend' },
-  { id:'sofia', name:'Sofia', skin:'#c68642', shirt:'#e84393', hair:'#1a1a1a', style:1, anchor:[11,16], bio:'Painter who loves the fountain' },
-  { id:'marco', name:'Marco', skin:'#f1c27d', shirt:'#16a085', hair:'#3d2314', style:0, anchor:[13,11], bio:'Knows every diner special' },
-  { id:'yuki',  name:'Yuki',  skin:'#ffdbac', shirt:'#8e44ad', hair:'#101820', style:1, anchor:[19,13], bio:'Mall enthusiast, great taste' },
-  { id:'ava',   name:'Ava',   skin:'#8d5524', shirt:'#d63031', hair:'#0d0d0d', style:1, anchor:[10,5],  bio:'Your green-thumbed neighbor' },
-  { id:'noah',  name:'Noah',  skin:'#e0ac69', shirt:'#0984e3', hair:'#4a2f1b', style:2, anchor:[17,6],  bio:'Cat person. Big time.' },
+  { id:'liam',  name:'Liam',  skin:'#e0ac69', shirt:'#e67e22', hair:'#2c1b10', style:2, anchor:[7,18],  bio:'Park regular, frisbee legend',  job:'Mechanic', jobIcon:'🔧', perk:'rideDiscount',  perkAt:50, perkDesc:'20% off vehicles at the Mall' },
+  { id:'sofia', name:'Sofia', skin:'#c68642', shirt:'#e84393', hair:'#1a1a1a', style:1, anchor:[11,16], bio:'Painter who loves the fountain', job:'Stylist',  jobIcon:'💇', perk:'styleDiscount', perkAt:50, perkDesc:'20% off outfits & the salon' },
+  { id:'marco', name:'Marco', skin:'#f1c27d', shirt:'#16a085', hair:'#3d2314', style:0, anchor:[13,11], bio:'Knows every diner special',      job:'Diner Chef',jobIcon:'🍳', perk:'dinerDiscount', perkAt:50, perkDesc:'30% off meals at the diner' },
+  { id:'yuki',  name:'Yuki',  skin:'#ffdbac', shirt:'#8e44ad', hair:'#101820', style:1, anchor:[19,13], bio:'Mall enthusiast, great taste',   job:'Shopkeeper',jobIcon:'🛍️', perk:'mallDiscount',  perkAt:50, perkDesc:'15% off gifts & home upgrades' },
+  { id:'ava',   name:'Ava',   skin:'#8d5524', shirt:'#d63031', hair:'#0d0d0d', style:1, anchor:[10,5],  bio:'Your green-thumbed neighbor',   job:'Gardener',  jobIcon:'🌱', perk:'homeDiscount',  perkAt:50, perkDesc:'free Zen Plants + cheaper decor' },
+  { id:'noah',  name:'Noah',  skin:'#e0ac69', shirt:'#0984e3', hair:'#4a2f1b', style:2, anchor:[17,6],  bio:'Cat person. Big time.',         job:'Nurse',     jobIcon:'🩺', perk:'medicDiscount', perkAt:50, perkDesc:'hospital bills are halved' },
+];
+const ARRIVAL_NAMES = [
+  { id:'rosa',  name:'Rosa',  skin:'#c68642', shirt:'#00b894', hair:'#3d2314', style:3 },
+  { id:'kenji', name:'Kenji', skin:'#f1c27d', shirt:'#0984e3', hair:'#1a1a1a', style:0 },
+  { id:'tariq', name:'Tariq', skin:'#8d5524', shirt:'#fdcb6e', hair:'#0d0d0d', style:2 },
+  { id:'elena', name:'Elena', skin:'#ffdbac', shirt:'#e84393', hair:'#7b4a12', style:4 },
+];
+const MOVE_REASONS = ['for a new job 💼','to be closer to family 👪','chasing a dream 🌟','for love 💕','for a fresh start 🌱','to travel the world ✈️'];
+
+/* ---------------- town activities ---------------- */
+const CINEMA_FILMS = [
+  { icon:'🍿', name:'Comedy Night',   cost:20, fun:42, social:10 },
+  { icon:'👻', name:'Horror Flick',   cost:20, fun:48, social:6, energy:-6 },
+  { icon:'💞', name:'Rom-Com',        cost:25, fun:40, social:16 },
+  { icon:'🚀', name:'Sci-Fi Epic',    cost:30, fun:55, social:8 },
+];
+const ARCADE_GAMES = [
+  { icon:'👾', name:'Space Blasters', cost:10, fun:26 },
+  { icon:'🏎️', name:'Turbo Racer',    cost:12, fun:30 },
+  { icon:'🕺', name:'Dance Off',      cost:12, fun:28, energy:-8, social:8 },
+  { icon:'🎯', name:'Skee-Ball',      cost:8,  fun:22 },
+];
+const LIBRARY_BOOKS = [
+  { icon:'📖', name:'A Good Novel',     cost:0, fun:20, energy:4 },
+  { icon:'📜', name:'History Tome',     cost:0, fun:14, xp:18 },
+  { icon:'🧠', name:'Self-Help Guide',  cost:0, fun:10, xp:12, social:6 },
+];
+const CAFE_MENU = [
+  { icon:'☕', name:'Latte',        cost:8,  energy:20, fun:6,  social:6 },
+  { icon:'🍰', name:'Slice of Cake',cost:14, hunger:30, fun:14 },
+  { icon:'🥪', name:'Panini',       cost:18, hunger:48, fun:6,  social:6 },
+  { icon:'🧋', name:'Bubble Tea',   cost:12, fun:20, social:10 },
 ];
 const CHAT_LINES = [
   'talked about the weather ☀️','swapped diner gossip 🍔','laughed about cats 🐈',
@@ -253,6 +277,8 @@ const QUEST_POOL = [
   { id:'biz1',     icon:'🏢', txt:'Open your own business',       ev:'bizstart', n:1, coin:120, xp:70,  cond:'noBiz' },
   { id:'biz3',     icon:'💼', txt:'Run your business 3 times',    ev:'biz',      n:3, coin:150, xp:80,  cond:'hasBiz' },
   { id:'school1',  icon:'🏫', txt:'Send a child to school',       ev:'school',   n:1, coin:70,  xp:45,  cond:'hasSchoolKid' },
+  { id:'fun3',     icon:'🎟️', txt:'Enjoy 3 town activities',       ev:'activity', n:3, coin:90,  xp:55 },
+  { id:'perk1',    icon:'🎁', txt:'Unlock a friend perk (50❤)',    ev:'perkunlock', n:1, coin:160, xp:100 },
 ];
 
 /* ---------------- furniture footprints & meta ---------------- */
@@ -285,6 +311,7 @@ const OBJTYPES = {
   nightstand:{ name:'Nightstand',  icon:'🛋️', desc:'Holds the lamp. Heroic.', fp:[[0,0]] },
   bench:     { name:'Park Bench',  icon:'🪑', desc:'Best people-watching seat.', fp:[[0,0],[1,0]] },
   fountain:  { name:'Fountain',    icon:'⛲', desc:'Make a wish — 1💰 a toss.', fp:[[0,0],[1,0],[0,1],[1,1]] },
+  picnic:    { name:'Picnic Table', icon:'🧺', desc:'A lovely spot for a bite outdoors.', fp:[[0,0],[1,0]] },
 };
 
 /* needs config */

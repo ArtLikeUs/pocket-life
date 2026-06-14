@@ -137,7 +137,12 @@ function buildTown(){
   }
   scene={type:'town', map, cols, rows, solid, furnAt, doors};
   // npc sprites (your partner lives with you now, not in town)
-  npcSprites = NPCS.filter(n=>n.id!==S.partner).map(n=>({ def:n, px:(n.anchor[0]+.5)*T, py:(n.anchor[1]+.5)*T, dir:'S', wt:0, cool:Math.random()*3, tpath:[] }));
+  const present=(S.present||NPCS.map(n=>n.id));
+  const parkSpots=[[12,20],[20,21],[24,22],[16,25],[26,24]];
+  npcSprites = present.filter(id=>id!==S.partner).map((id,idx)=>{ const def=npcDef(id); if(!def) return null;
+    const a=def.anchor||parkSpots[idx%parkSpots.length];
+    return { def, px:(a[0]+.5)*T, py:(a[1]+.5)*T, dir:'S', wt:0, cool:Math.random()*3, tpath:[], anchor:a };
+  }).filter(Boolean);
 }
 
 /* ----- household sprites (partner & kids at home) ----- */
@@ -146,7 +151,7 @@ function buildHomies(){
   homies=[];
   if(!scene||scene.type!=='home') return;
   const def=homeDef();
-  if(S.partner){ const pn=NPCS.find(n=>n.id===S.partner); const z=def.partnerZone;
+  if(S.partner){ const pn=npcDef(S.partner); const z=def.partnerZone;
     homies.push({kind:'partner', id:pn.id, name:pn.name, look:{skin:pn.skin,shirt:pn.shirt,hair:pn.hair,style:pn.style},
       px:(z.x+1+.5)*T, py:(z.y+1+.5)*T, zone:z, dir:'S', wt:0, cool:1+Math.random()*3, tpath:[], sc:1});
   }
@@ -516,6 +521,11 @@ function drawFurn(t,x,y,o){
       ctx.fillStyle='#d9c08f'; ctx.fillRect(x+T/2-3,y+10,6,2); ctx.fillRect(x+T/2-3,y+T*0.6,6,2); break; }
     case 'nightstand': { box(x+6,y+10,T-12,T-14,3,'#9c6b3f'); ctx.fillStyle='#5c3d24'; ctx.fillRect(x+T/2-1,y+3,2,9); rr(x+T/2-7,y-1,14,7,3,isNight()?'#ffe9a8':'#e8d9a8'); break; }
     case 'bench': { box(x+3,y+T*0.4,2*T-6,T*0.34,3,'#9c6b3f'); ctx.fillStyle='#7a5230'; ctx.fillRect(x+5,y+T*0.74,4,T*0.2); ctx.fillRect(x+2*T-9,y+T*0.74,4,T*0.2); break; }
+    case 'picnic': {
+      box(x+5,y+T*0.5,2*T-10,T*0.28,3,'#cf6f6f');                     // red-check tabletop
+      ctx.fillStyle='rgba(255,255,255,.5)'; for(let i=0;i<5;i++) ctx.fillRect(x+8+i*((2*T-16)/5),y+T*0.5,2,T*0.28);
+      ctx.fillStyle='#8a6a3a'; ctx.fillRect(x+8,y+T*0.78,4,T*0.18); ctx.fillRect(x+2*T-12,y+T*0.78,4,T*0.18);
+      ctx.font='12px sans-serif'; ctx.fillText('🧺',x+2*T-16,y+T*0.48); break; }
     case 'fountain': {
       box(x+3,y+3,2*T-6,2*T-6,12,'#9aa6b2'); rr(x+9,y+9,2*T-18,2*T-18,10,COL.water);
       ctx.fillStyle='#cfeaf6'; ctx.beginPath(); ctx.arc(x+T,y+T,5,0,7); ctx.fill();
@@ -837,6 +847,36 @@ function tick(dt){
       if(k.happy<35) toast('🥺 '+k.name+' misses you — play with them!');
     }
   } }
+  // town comes & goes (people move away / move in) on each new day
+  const today=Math.floor(S.minutes/1440)+1;
+  if(today>(S.lastDay||today)){ S.lastDay=today; townDayEvents(); }
+}
+function townDayEvents(){
+  const ALL=NPCS.concat(ARRIVAL_NAMES).map(n=>n.id);
+  // a departure (never your partner, never close friends ≥80❤)
+  if(Math.random()<0.18){
+    const leavers=(S.present||[]).filter(id=>id!==S.partner && !((S.rels[id]||{}).rel>=80));
+    if(leavers.length>2){
+      const id=leavers[Math.floor(Math.random()*leavers.length)];
+      S.present=S.present.filter(x=>x!==id);
+      const reason=MOVE_REASONS[Math.floor(Math.random()*MOVE_REASONS.length)];
+      S.movedAway[id]=reason;
+      if(scene&&scene.type==='town') buildTown();
+      toast('👋 '+(npcDef(id)||{}).name+' moved away '+reason);
+    }
+  }
+  // an arrival (someone new, or a return)
+  if(Math.random()<0.28){
+    const away=ALL.filter(id=>(S.present||[]).indexOf(id)<0);
+    if(away.length){
+      const id=away[Math.floor(Math.random()*away.length)];
+      S.present=(S.present||[]).concat(id);
+      const returning=!!S.movedAway[id]; delete S.movedAway[id];
+      if(scene&&scene.type==='town') buildTown();
+      const d=npcDef(id);
+      toast((returning?'🏡 '+d.name+' moved back to town!':'🎉 '+d.name+' just moved to town! Say hi 👋'));
+    }
+  }
 }
 function applyFx(fx){ for(const k in fx){ if(k in S.needs) S.needs[k]=clamp(S.needs[k]+fx[k],0,100); } }
 function finishAction(){ if(action&&action.returnPx){ S.px=action.returnPx[0]; S.py=action.returnPx[1]; }
@@ -876,7 +916,7 @@ function tickNPCs(dt){
       n.wt+=dt*9;
     } else { n.cool-=dt;
       if(n.cool<=0){ n.cool=4+Math.random()*5;
-        const a=n.def.anchor; const tc=clamp(a[0]+Math.round((Math.random()-.5)*3),1,scene.cols-2), tr=clamp(a[1]+Math.round((Math.random()-.5)*3),1,scene.rows-2);
+        const a=n.anchor||n.def.anchor; const tc=clamp(a[0]+Math.round((Math.random()-.5)*3),1,scene.cols-2), tr=clamp(a[1]+Math.round((Math.random()-.5)*3),1,scene.rows-2);
         const p=findPath(Math.floor(n.px/T),Math.floor(n.py/T),tc,tr); if(p&&p.length) n.tpath=p;
       } }
   }
@@ -972,6 +1012,9 @@ function showObjectSheet(o,key){
     add('☕','Pull a shot','5💰 · +'+(ba?60:30)+' energy'+(ba?' (Barista!)':''),'x',()=>{ if(!spend(5)) return; doAct(o,key,'☕','Espresso',{energy:ba?60:30,fun:4},8,()=>{ qprogress('coffee'); }); }); }
   else if(t==='table2'){ add('🍽️','Sit & eat','+social if family is home','x',()=>doAct(o,key,'🍽️','Dining',{social:20,fun:8},20,()=>{ if(S.partner) rel(S.partner,2); })); }
   else if(t==='fountain'){ add('🪙','Make a wish','Toss 1💰 for luck','x',()=>{ if(!spend(1)) return; closeSheet(); burst(S.px-cam.x,S.py-cam.y-20,'spark'); SFX.coin(); toast('🪙 You made a wish ✨'); S.needs.fun=clamp(S.needs.fun+10,0,100); qprogress('fountain'); addXP(8); }); }
+  else if(t==='picnic'){ add('🧺','Have a picnic','+fun +social, relaxing','p',()=>doAct(o,key,'🧺','Picnicking',{fun:24,social:16,hunger:14},25,()=>{ qprogress('activity'); }));
+    add('☀️','Sunbathe','+fun, recharge a little','s',()=>doAct(o,key,'😎','Sunbathing',{fun:16,energy:8},20)); }
+  else if(t==='bench'){ add('🪑','Rest a while','+energy +fun','x',()=>doAct(o,key,'😌','Resting',{energy:18,fun:8},18,()=>{ qprogress('activity'); })); }
   else { add(m.icon,'Inspect',m.desc,'x',()=>{ closeSheet(); S.needs.fun=clamp(S.needs.fun+4,0,100); toast(m.icon+' '+m.desc); }); }
 
   add('✖️','Close','','close',closeSheet);
@@ -1085,6 +1128,18 @@ function rel(id,amt){
   const before=S.rels[id].rel;
   S.rels[id].rel=clamp(S.rels[id].rel+amt,0,100);
   if(before<40&&S.rels[id].rel>=40) qprogress('rel40');
+  const def=npcDef(id);
+  if(def&&def.perk&&before<def.perkAt&&S.rels[id].rel>=def.perkAt){
+    SFX.level(); burst(S.px-cam.x,S.py-cam.y-30,'confetti');
+    toast('🎁 '+def.name+' perk unlocked: '+def.perkDesc+'!');
+    qprogress('perkunlock');
+  }
+}
+function npcDef(id){ return NPCS.find(n=>n.id===id) || ARRIVAL_NAMES.find(n=>n.id===id); }
+function npcPresent(id){ return (S.present||NPCS.map(n=>n.id)).indexOf(id)>=0; }
+function hasPerk(effectId){
+  for(const n of NPCS){ if(n.perk===effectId){ const R=S.rels[n.id]; if(R&&R.rel>=n.perkAt&&npcPresent(n.id)) return true; } }
+  return false;
 }
 function tapNPC(n){
   SFX.tap();
@@ -1092,11 +1147,16 @@ function tapNPC(n){
   goNextTo(Math.floor(n.px/T),Math.floor(n.py/T), ()=>showNPCSheet(n.def.id));
 }
 function showNPCSheet(id){
-  const def=NPCS.find(n=>n.id===id); if(!S.rels[id]) S.rels[id]={rel:0,met:true,romance:false};
+  const def=npcDef(id); if(!def) return; if(!S.rels[id]) S.rels[id]={rel:0,met:true,romance:false};
   const R=S.rels[id]; sheetActions={};
   const isPartner=S.partner===id;
   const status=isPartner?'💞 Partner':R.rel>=75?'❤️ In love':R.rel>=50?'😊 Close friend':R.rel>=25?'🙂 Friend':'🤝 Acquaintance';
   let body=sheetHead('🧑','Talk to '+def.name, def.bio+' · '+status+' ('+Math.round(R.rel)+'❤)');
+  if(def.job){
+    const active=R.rel>=def.perkAt;
+    body+=`<div style="background:${active?'rgba(94,224,122,.12)':'rgba(255,255,255,.05)'};border:1px solid ${active?'rgba(94,224,122,.35)':'rgba(255,255,255,.1)'};border-radius:12px;padding:9px 12px;margin:2px 0 4px;font-size:12px">`+
+      `<b>${def.jobIcon} ${def.job}</b><br><span style="color:#bdb6d6">${active?'✅ Perk active: ':'🔒 At '+def.perkAt+'❤: '}${def.perkDesc}</span></div>`;
+  }
   const add=(icon,title,sub,fn,dis)=>{ const idk='n'+Object.keys(sheetActions).length; body+=item(icon,title,sub,null,`data-a="${idk}"${dis?' disabled':''}`); sheetActions[idk]=fn; };
 
   add('💬','Chat','+social, +rel',()=>npcSocial(id,'chat',{social:18},6));
@@ -1122,7 +1182,7 @@ function showNPCSheet(id){
 }
 function npcSocial(id,kind,fx,dur,romantic){
   if(S.needs.energy<5){ toast('Too tired to socialize ⚡'); SFX.err(); return; }
-  const def=NPCS.find(n=>n.id===id);
+  const def=npcDef(id);
   action={kind:'timed', icon:romantic?'💘':'💬', label:'With '+def.name, fx, total:dur, left:dur,
     done:()=>{ const amt=(romantic?9:6) + (kind==='compliment'?2:0) + ({dress:2,gown:2,blouse:1}[S.outfit]||0); rel(id, amt);
       if(romantic){ S.rels[id].romance=true; burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); }
@@ -1132,7 +1192,7 @@ function npcSocial(id,kind,fx,dur,romantic){
   closeSheet();
 }
 function npcDate(id){
-  const def=NPCS.find(n=>n.id===id);
+  const def=npcDef(id);
   action={kind:'timed', icon:'🌹', label:'On a date with '+def.name, fx:{fun:30,social:35,energy:-6}, total:40, left:40,
     done:()=>{ rel(id,18); S.rels[id].romance=true; burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); addXP(20); toast('🌹 Lovely date with '+def.name+'!'); } };
   closeSheet();
@@ -1144,7 +1204,7 @@ function giftPicker(id){
     const idk='g'+g.id; body+=item(g.icon,g.name,'x'+have+(g.rel?' · +'+g.rel+'❤':''),null,`data-a="${idk}"`);
     sheetActions[idk]=()=>{ S.gifts[g.id]--; if(g.id==='ring'){ closeSheet(); toast('Use 💍 via Propose 💍'); return; }
       rel(id,g.rel); burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); qprogress('gift'); addXP(12);
-      toast(NPCS.find(n=>n.id===id).name+' loved the '+g.name+'! +'+g.rel+'❤'); closeSheet(); }; });
+      toast(npcDef(id).name+' loved the '+g.name+'! +'+g.rel+'❤'); closeSheet(); }; });
   if(!any) body+=`<p style="color:#bdb6d6;font-size:12px;margin-top:8px">Your gift bag is empty. Buy some at 🛍️ Maple Mall.</p>`;
   body+=item('↩️','Back','','',`data-a="back"`); sheetActions.back=()=>showNPCSheet(id);
   openSheet(body); bindSheet();
@@ -1155,7 +1215,7 @@ function propose(id){
   npcSprites=npcSprites.filter(sp=>sp.def.id!==id);   // they move in with you
   buildHomies();
   burst(S.px-cam.x,S.py-cam.y-30,'confetti'); SFX.level(); qprogress('partner');
-  addXP(60); toast('💍 '+NPCS.find(n=>n.id===id).name+' said YES! They moved in 🏡💞'); closeSheet(); refreshLifeDot(); save();
+  addXP(60); toast('💍 '+npcDef(id).name+' said YES! They moved in 🏡💞'); closeSheet(); refreshLifeDot(); save();
 }
 function tryBaby(id){
   if(S.kids.length>=4){ toast('Your home is full!'); return; }
@@ -1167,7 +1227,7 @@ function tryBaby(id){
   burst(S.px-cam.x,S.py-cam.y-30,'confetti'); SFX.level();
   addXP(50); toast('👶 Welcome baby '+name+'! Find them at home 🏠'); closeSheet(); refreshLifeDot(); save();
 }
-function breakup(id){ if(!confirm('Break up with '+NPCS.find(n=>n.id===id).name+'?')) return;
+function breakup(id){ if(!confirm('Break up with '+npcDef(id).name+'?')) return;
   S.partner=null; S.rels[id].rel=Math.max(0,S.rels[id].rel-30); S.rels[id].romance=false; toast('💔 You broke up.'); closeSheet(); save(); }
 
 /* ----- buildings (town doors) ----- */
@@ -1181,6 +1241,10 @@ function enterBuilding(bid){
   if(bid==='hospital'){ showHospital(); return; }
   if(bid==='university'){ showUniversity(); return; }
   if(bid==='school'){ showSchool(); return; }
+  if(bid==='cinema'){ showActivity('🎬','Starlight Cinema','Catch a film — popcorn included 🍿',CINEMA_FILMS,'tv'); return; }
+  if(bid==='arcade'){ showActivity('🕹️','Pixel Arcade','Blow off steam on the machines!',ARCADE_GAMES,'fit'); return; }
+  if(bid==='library'){ showActivity('📚','Town Library','Free to browse. Quiet, please.',LIBRARY_BOOKS,null); return; }
+  if(bid==='cafe'){ showActivity('☕','Cozy Cafe','Treats, drinks & good vibes.',CAFE_MENU,'coffee'); return; }
   if(bid==='nb1'){ showNPCSheet('ava'); return; }
   if(bid==='nb2'){ showNPCSheet('noah'); return; }
 }
@@ -1264,11 +1328,35 @@ function showHospital(){
   openSheet(body); bindSheet();
 }
 function showDiner(){
-  sheetActions={}; let body=sheetHead('🍔','Sunny Diner','Eat out — tasty & a little social');
-  FOODS_DINER.forEach((f,i)=>{ const idk='d'+i; body+=item(f.icon,f.name,'+'+f.hunger+'🍗'+(f.social?' +'+f.social+'💬':''),{txt:f.cost+'💰'},`data-a="${idk}"`);
-    sheetActions[idk]=()=>{ if(!spend(f.cost)) return; const fx={hunger:f.hunger,fun:f.fun||0}; if(f.energy)fx.energy=f.energy; if(f.social)fx.social=f.social;
+  sheetActions={}; const disc=hasPerk('dinerDiscount');
+  let body=sheetHead('🍔','Sunny Diner','Eat out — tasty & a little social'+(disc?' · 🍳 Marco: 30% off!':''));
+  FOODS_DINER.forEach((f,i)=>{ const idk='d'+i; const cost=disc?Math.round(f.cost*0.7):f.cost;
+    body+=item(f.icon,f.name,'+'+f.hunger+'🍗'+(f.social?' +'+f.social+'💬':''),{txt:cost+'💰'},`data-a="${idk}"`);
+    sheetActions[idk]=()=>{ if(!spend(cost)) return; const fx={hunger:f.hunger,fun:f.fun||0}; if(f.energy)fx.energy=f.energy; if(f.social)fx.social=f.social;
       applyFx(fx); burst(S.px-cam.x,S.py-cam.y-34,'spark','+'+f.hunger+'🍗'); SFX.eat(); S.stats.eat=(S.stats.eat||0)+1; qprogress('eat'); if(f.id==='coffee') qprogress('coffee'); addXP(6); toast('Enjoyed '+f.name+'!'); closeSheet(); }; });
   body+=item('✖️','Close','','',`data-a="x"`); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function showActivity(icon,title,sub,menu,questEv){
+  sheetActions={};
+  let body=sheetHead(icon,title,sub);
+  menu.forEach((m,i)=>{ const idk='ac'+i;
+    const bits=[]; for(const k of ['hunger','energy','fun','social']) if(m[k]) bits.push((m[k]>0?'+':'')+m[k]+' '+k);
+    if(m.xp) bits.push('+'+m.xp+'xp');
+    body+=item(m.icon,m.name,bits.join(' · '),{txt:m.cost?m.cost+'💰':'free'},`data-a="${idk}"`);
+    sheetActions[idk]=()=>{
+      if(m.cost&&!spend(m.cost)) return;
+      const fx={}; for(const k of ['hunger','energy','fun','social']) if(m[k]) fx[k]=m[k];
+      applyFx(fx);
+      burst(S.px-cam.x,S.py-cam.y-30,'spark', m.fun?'+'+m.fun+'🎉':'✨'); SFX.good();
+      if(m.xp) addXP(m.xp);
+      if(questEv) qprogress(questEv);
+      if(m.hunger) qprogress('eat');
+      qprogress('activity');
+      toast(m.icon+' '+m.name+' — nice!'); closeSheet();
+    };
+  });
+  body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
   openSheet(body); bindSheet();
 }
 function showGym(){
@@ -1510,7 +1598,7 @@ function updateAwayChip(){ const c=el('awayChip');
 function hospitalize(){
   if(action&&action.returnPx){ S.px=action.returnPx[0]; S.py=action.returnPx[1]; }
   action=null; path=[]; pending=null; closeSheet(); closeModal();
-  S.hospital={ left:240, bill:Math.floor(S.coins*0.8) };
+  S.hospital={ left:240, bill:Math.floor(S.coins*(hasPerk('medicDiscount')?0.4:0.8)) };
   toast('😵 '+S.name+' collapsed! Rushed to the hospital…'); SFX.err();
   updateAwayChip(); save();
 }
@@ -1552,41 +1640,49 @@ function renderShop(){
       genActions['home_'+h.id]=()=>buyHome(h);
     });
   } else if(shopTab==='vehicles'){
+    const rd=hasPerk('rideDiscount');
+    if(rd) body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">🔧 Liam: 20% off all rides!</p>`;
     body+=item('🚶','On foot','Always available',{txt:S.vehicle?'':'Active',owned:!S.vehicle},`data-g="veh_none"`); genActions.veh_none=()=>{ S.vehicle=null; toast('Walking it is 🚶'); save(); renderShop(); };
-    VEHICLES.forEach(v=>{ const owned=(S.vehicles||[]).includes(v.id); const active=S.vehicle===v.id;
-      body+=item(v.icon,v.name,v.desc,{txt:active?'Driving':owned?'Owned · tap to drive':v.price+'💰',owned:owned||active},`data-g="veh_${v.id}"`);
+    VEHICLES.forEach(v=>{ const owned=(S.vehicles||[]).includes(v.id); const active=S.vehicle===v.id; const price=rd?Math.round(v.price*0.8):v.price;
+      body+=item(v.icon,v.name,v.desc,{txt:active?'Driving':owned?'Owned · tap to drive':price+'💰',owned:owned||active},`data-g="veh_${v.id}"`);
       genActions['veh_'+v.id]=()=>buyVehicle(v);
     });
   } else if(shopTab==='gifts'){
-    body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">Stock up, then give gifts to build relationships 💞</p>`;
-    GIFTS.forEach(g=>{ const have=(S.gifts&&S.gifts[g.id])||0;
-      body+=item(g.icon,g.name,g.desc+(have?' · have '+have:''),{txt:g.price+'💰'},`data-g="gift_${g.id}"`);
-      genActions['gift_'+g.id]=()=>{ if(!spend(g.price)) return; S.gifts[g.id]=(S.gifts[g.id]||0)+1; SFX.coin(); toast('Bought '+g.name+' '+g.icon); save(); renderShop(); };
+    const md=hasPerk('mallDiscount');
+    body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">Stock up, then give gifts to build relationships 💞${md?' · 🛍️ Yuki: 15% off!':''}</p>`;
+    GIFTS.forEach(g=>{ const have=(S.gifts&&S.gifts[g.id])||0; const price=md?Math.round(g.price*0.85):g.price;
+      body+=item(g.icon,g.name,g.desc+(have?' · have '+have:''),{txt:price+'💰'},`data-g="gift_${g.id}"`);
+      genActions['gift_'+g.id]=()=>{ if(!spend(price)) return; S.gifts[g.id]=(S.gifts[g.id]||0)+1; SFX.coin(); toast('Bought '+g.name+' '+g.icon); save(); renderShop(); };
     });
   } else if(shopTab==='style'){
-    body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">Outfits change your look — and your life 👗</p>`;
+    const sd=hasPerk('styleDiscount');
+    body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">Outfits change your look — and your life 👗${sd?' · 💇 Sofia: 20% off!':''}</p>`;
     body+=item('🧍','Original look','Back to your first shirt',{txt:S.outfit?'Wear':'Wearing',owned:!S.outfit},`data-g="of_none"`);
     genActions.of_none=()=>{ S.outfit=null; S.shirt=S.baseShirt; SFX.good(); toast('Back to the classic look 🧍'); save(); renderShop(); };
-    OUTFITS.forEach(of=>{ const owned=S.wardrobe.includes(of.id); const on=S.outfit===of.id;
-      body+=item(of.icon,of.name,of.perk,{txt:on?'Wearing':owned?'Wear':of.price+'💰',owned:on||owned},`data-g="of_${of.id}"`);
+    OUTFITS.forEach(of=>{ const owned=S.wardrobe.includes(of.id); const on=S.outfit===of.id; const price=sd?Math.round(of.price*0.8):of.price;
+      body+=item(of.icon,of.name,of.perk,{txt:on?'Wearing':owned?'Wear':price+'💰',owned:on||owned},`data-g="of_${of.id}"`);
       genActions['of_'+of.id]=()=>{
-        if(!owned){ if(!spend(of.price)) return; S.wardrobe.push(of.id); qprogress('outfit'); SFX.coin(); burst(vw/2,vh/2,'confetti'); }
+        if(!owned){ if(!spend(price)) return; S.wardrobe.push(of.id); qprogress('outfit'); SFX.coin(); burst(vw/2,vh/2,'confetti'); }
         S.outfit=of.id; S.shirt=of.col; SFX.good(); toast('Wearing the '+of.name+' '+of.icon);
         save(); renderShop(); };
     });
-    body+=`<label style="display:block;font-size:11px;font-weight:700;color:#bdb6d6;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px">💈 Salon — hair color (${SALON_HAIR_PRICE}💰)</label>`;
+    const hairP=sd?Math.round(SALON_HAIR_PRICE*0.8):SALON_HAIR_PRICE, styleP=sd?Math.round(SALON_STYLE_PRICE*0.8):SALON_STYLE_PRICE;
+    body+=`<label style="display:block;font-size:11px;font-weight:700;color:#bdb6d6;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px">💈 Salon — hair color (${hairP}💰)</label>`;
     body+=`<div class="swatches">`+HAIRC.map((c,i)=>`<button class="sw ${S.hair===c?'sel':''}" style="background:${c}" data-g="hc_${i}"></button>`).join('')+`</div>`;
-    HAIRC.forEach((c,i)=>{ genActions['hc_'+i]=()=>{ if(S.hair===c) return; if(!spend(SALON_HAIR_PRICE)) return; S.hair=c; SFX.good(); burst(vw/2,vh/3,'spark'); toast('Fresh color! 💈'); save(); renderShop(); }; });
-    body+=`<label style="display:block;font-size:11px;font-weight:700;color:#bdb6d6;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px">💈 Hair style (${SALON_STYLE_PRICE}💰)</label>`;
+    HAIRC.forEach((c,i)=>{ genActions['hc_'+i]=()=>{ if(S.hair===c) return; if(!spend(hairP)) return; S.hair=c; SFX.good(); burst(vw/2,vh/3,'spark'); toast('Fresh color! 💈'); save(); renderShop(); }; });
+    body+=`<label style="display:block;font-size:11px;font-weight:700;color:#bdb6d6;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px">💈 Hair style (${styleP}💰)</label>`;
     body+=`<div class="pillrow">`+HAIRSTYLES.map((nm,i)=>`<button class="pill ${S.hairStyle===i?'sel':''}" data-g="hs_${i}">${nm}</button>`).join('')+`</div>`;
-    HAIRSTYLES.forEach((nm,i)=>{ genActions['hs_'+i]=()=>{ if(S.hairStyle===i) return; if(!spend(SALON_STYLE_PRICE)) return; S.hairStyle=i; SFX.good(); toast("New 'do! 💈"); save(); renderShop(); }; });
+    HAIRSTYLES.forEach((nm,i)=>{ genActions['hs_'+i]=()=>{ if(S.hairStyle===i) return; if(!spend(styleP)) return; S.hairStyle=i; SFX.good(); toast("New 'do! 💈"); save(); renderShop(); }; });
   } else if(shopTab==='decor'){
     body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">Upgrade rooms in tiers — each level improves daily life 🏡</p>`;
+    const hd=hasPerk('homeDiscount');
+    if(hd) body+=`<p style="font-size:11px;color:#bdb6d6;margin:4px 2px">🌱 Ava: 15% off home upgrades!</p>`;
     HOME_UPGRADES.forEach(u=>{
       const lv=(S.homeLv&&S.homeLv[u.id])||0; const cur=u.tiers[lv]; const next=u.tiers[lv+1];
       if(next){
-        body+=item(u.icon,u.name+' → '+next.name,'Now: '+cur.name+' · '+next.desc,{txt:next.price+'💰'},`data-g="hu_${u.id}"`);
-        genActions['hu_'+u.id]=()=>{ if(!spend(next.price)) return; S.homeLv[u.id]=lv+1; SFX.level(); burst(vw/2,vh/2,'confetti'); addXP(15); toast(u.icon+' '+next.name+' installed!'); save(); renderShop(); };
+        const price=hd?Math.round(next.price*0.85):next.price;
+        body+=item(u.icon,u.name+' → '+next.name,'Now: '+cur.name+' · '+next.desc,{txt:price+'💰'},`data-g="hu_${u.id}"`);
+        genActions['hu_'+u.id]=()=>{ if(!spend(price)) return; S.homeLv[u.id]=lv+1; SFX.level(); burst(vw/2,vh/2,'confetti'); addXP(15); toast(u.icon+' '+next.name+' installed!'); save(); renderShop(); };
       } else {
         body+=item(u.icon,u.name+': '+cur.name,'Fully upgraded ✨',{txt:'MAX',owned:true},'disabled');
       }
@@ -1696,7 +1792,7 @@ function renderPeople(){
   let body=`<h2>👪 People</h2><div class="sub">Your partner, kids & friends.</div>`;
   body+=lifeTabBar();
   // partner
-  if(S.partner){ const p=NPCS.find(n=>n.id===S.partner);
+  if(S.partner){ const p=npcDef(S.partner);
     body+=`<div class="relrow"><canvas class="ravatar" data-av="${p.id}" width="34" height="34"></canvas><div class="rinfo"><b>${p.name} <span class="tag">PARTNER</span></b><span class="meta">${Math.round(S.rels[p.id].rel)}❤ · ${S.kids.length} kid(s)</span></div></div>`; }
   // kids
   (S.kids||[]).forEach(k=>{ const stage=k.ageDays>=8?'Teen':k.ageDays>=3?'Child':'Baby';
@@ -1704,14 +1800,16 @@ function renderPeople(){
   // friends
   const friends=Object.entries(S.rels).filter(([id,r])=>r.rel>0&&id!==S.partner).sort((a,b)=>b[1].rel-a[1].rel);
   if(friends.length){ body+=`<label>Townsfolk</label>`;
-    friends.forEach(([id,r])=>{ const def=NPCS.find(n=>n.id===id); if(!def) return;
-      body+=`<div class="relrow"><canvas class="ravatar" data-av="${id}" width="34" height="34"></canvas><div class="rinfo"><b>${def.name}</b><div class="heartWrap"><div class="heartBar" style="width:${r.rel}%"></div></div></div><span class="meta">${Math.round(r.rel)}❤</span></div>`; }); }
-  if(!S.partner&&!friends.length) body+=`<p style="color:#bdb6d6;font-size:12.5px;margin-top:10px">Head out 🚪 and chat with townsfolk to build relationships. Reach 75❤ + a 💍 ring to propose!</p>`;
+    friends.forEach(([id,r])=>{ const def=npcDef(id); if(!def) return;
+      const gone=!npcPresent(id);
+      const jobLine=def.job?`<span class="meta">${def.jobIcon} ${def.job}${r.rel>=def.perkAt?' · 🎁 perk active':''}</span>`:'';
+      body+=`<div class="relrow"${gone?' style="opacity:.55"':''}><canvas class="ravatar" data-av="${id}" width="34" height="34"></canvas><div class="rinfo"><b>${def.name}${gone?' <span class="meta">(moved away)</span>':''}</b><div class="heartWrap"><div class="heartBar" style="width:${r.rel}%"></div></div>${jobLine}</div><span class="meta">${Math.round(r.rel)}❤</span></div>`; }); }
+  if(!S.partner&&!friends.length) body+=`<p style="color:#bdb6d6;font-size:12.5px;margin-top:10px">Head out 🚪 and chat with townsfolk to build relationships. Each has a job — get close (50❤) for a perk! Reach 75❤ + a 💍 ring to propose.</p>`;
   body+=`<button class="closebtn" data-g="close">Close</button>`;
   wireLifeTabs(); genActions.close=closeModal;
   openModal(body);
   // draw avatars
-  genCard.querySelectorAll('[data-av]').forEach(c=>{ const def=NPCS.find(n=>n.id===c.dataset.av); if(def) drawAvatar(c,def); });
+  genCard.querySelectorAll('[data-av]').forEach(c=>{ const def=npcDef(c.dataset.av); if(def) drawAvatar(c,def); });
 }
 function drawAvatar(canvas,look){
   const x=canvas.getContext('2d'); x.clearRect(0,0,34,34); x.fillStyle='#161426'; x.fillRect(0,0,34,34);
@@ -1756,6 +1854,7 @@ function freshState(opts){
     homeTier:0, upgrades:{}, homeLv:{bed:0,tv:0,kitchen:0,decor:0,bath:0},
     career:null, jobLvl:1, wardrobe:[], outfit:null, baseShirt:opts.shirt,
     degree:false, eduCredits:0, studying:null, business:null,
+    present:NPCS.map(n=>n.id), movedAway:{}, lastDay:1,
     vehicles:[], vehicle:null, gifts:{},
     rels:{}, partner:null, kids:[], quests:[], stats:{}, warned:{} };
   return s;
@@ -1780,6 +1879,8 @@ function normalize(s){
   // wave 2: education + business
   s.degree=s.degree||false; if(typeof s.eduCredits!=='number') s.eduCredits=0;
   s.studying=s.studying||null; s.business=s.business||null;
+  s.present=s.present||NPCS.map(n=>n.id); s.movedAway=s.movedAway||{};
+  if(typeof s.lastDay!=='number') s.lastDay=Math.floor((s.minutes||480)/1440)+1;
   for(const k of (s.kids||[])){ if(typeof k.grade!=='number') k.grade=0; k.atSchool=k.atSchool||null; if(typeof k.eduT!=='number') k.eduT=0; }
   if(!s.quests.length) { S=s; seedQuests(); }
   return s;
