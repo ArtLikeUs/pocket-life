@@ -791,7 +791,7 @@ function tick(dt){
   if(!S||paused) return;
   const sleeping=action&&action.kind==='sleep';
   const mult=(S.atWork||S.hospital||S.studying)?6:(sleeping?5:1);
-  const dtMin=dt*2*speed*mult;
+  const dtMin=dt*1.6*speed*mult;   // 1.6 game-min/real-sec → 15-min day at 1×, 5-min at 3×
   S.minutes+=dtMin;
 
   // kids attend school in the background even while you do your thing
