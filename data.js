@@ -175,6 +175,8 @@ const BUILDINGS = [
   { id:'mall',   label:'Maple Mall', sign:'🛍️', x:16, y:8, w:6, h:4, wall:'#b59ad0', roof:'#6c4f93', door:[18,11] },
   { id:'gym',    label:'Flex Gym', sign:'🏋️', x:2,  y:9, w:4, h:3, wall:'#88c6a5', roof:'#3a7d5d', door:[3,11] },
   { id:'hospital', label:'Town Hospital', sign:'🏥', x:14, y:15, w:5, h:4, wall:'#e8ecf2', roof:'#d6604f', door:[16,18] },
+  { id:'school',     label:'Town School', sign:'🏫', x:2,  y:15, w:5, h:4, wall:'#e6b35a', roof:'#9a4f2f', door:[4,18] },
+  { id:'university', label:'Maple University', sign:'🎓', x:20, y:14, w:5, h:4, wall:'#9aa6d0', roof:'#3a3f6e', door:[22,17] },
 ];
 const TOWN_FURN = [
   {t:'bench',c:6,r:16},{t:'bench',c:11,r:18},{t:'bench',c:20,r:16},
@@ -247,6 +249,10 @@ const QUEST_POOL = [
   { id:'career1',  icon:'📋', txt:'Pick a career at the Office',ev:'career',   n:1, coin:80,  xp:40, cond:'noCareer' },
   { id:'style1',   icon:'👕', txt:'Buy a new outfit',           ev:'outfit',   n:1, coin:60,  xp:35, cond:'noOutfit' },
   { id:'woo1',     icon:'🌹', txt:'Quality time with your partner', ev:'woohoo', n:1, coin:80, xp:50, cond:'hasPartner' },
+  { id:'degree1',  icon:'🎓', txt:'Earn a college degree',        ev:'degree',   n:1, coin:200, xp:120, cond:'noDegree' },
+  { id:'biz1',     icon:'🏢', txt:'Open your own business',       ev:'bizstart', n:1, coin:120, xp:70,  cond:'noBiz' },
+  { id:'biz3',     icon:'💼', txt:'Run your business 3 times',    ev:'biz',      n:3, coin:150, xp:80,  cond:'hasBiz' },
+  { id:'school1',  icon:'🏫', txt:'Send a child to school',       ev:'school',   n:1, coin:70,  xp:45,  cond:'hasSchoolKid' },
 ];
 
 /* ---------------- furniture footprints & meta ---------------- */
@@ -339,6 +345,34 @@ const MINIGAMES = {
   diagnose: { name:'Diagnose',         icon:'🩺', type:'sequence', tip:'Recall the symptoms in order!' },
   steady:   { name:'Steady Hands',     icon:'🤲', type:'timing',   tip:'Hold steady — stop in the green!' },
 };
+
+/* ---------------- college ---------------- */
+const COLLEGE = {
+  enroll:800, classes:4, payBonus:0.2,
+  desc:'Enroll, attend 4 classes, and earn a degree.',
+  perk:'Degree: careers pay +20% and shifts cost 30% less energy.',
+};
+
+/* ---------------- businesses (the entrepreneur path) ----------------
+   Harder than a job: variable income (can be a loss early), needs startup
+   capital, and you invest to raise the level/ceiling. Cool gigs swing wild
+   with a chance of a viral breakthrough; the Famous Singer is the hardest. */
+const BUSINESSES = [
+  // blue-collar — steadier
+  { id:'daycare',  icon:'🧸', name:'Sunny Daycare',      cat:'blue', base:150, swing:0.30, invest:400,  levelCost:300, desc:'Steady, wholesome income' },
+  { id:'diner',    icon:'🍔', name:"Mom's Diner",        cat:'blue', base:185, swing:0.35, invest:650,  levelCost:420, desc:'Honest food, honest money' },
+  { id:'printing', icon:'🖨️', name:'QuickPrint Shop',    cat:'blue', base:210, swing:0.38, invest:750,  levelCost:480, desc:'Flyers, posters, profit' },
+  { id:'construction', icon:'🏗️', name:'BuildRight Co.', cat:'blue', base:270, swing:0.45, invest:1300, levelCost:760, desc:'Big jobs, big swings' },
+  // cool — high ceiling, high risk, viral breakthroughs
+  { id:'influencer', icon:'📱', name:'Influencer',          cat:'cool', base:160, swing:0.80, invest:500,  levelCost:520, desc:'Go viral… or go quiet' },
+  { id:'photog',     icon:'📸', name:'Celebrity Photographer', cat:'cool', base:230, swing:0.62, invest:900, levelCost:640, desc:'One perfect shot pays huge' },
+  { id:'actor',      icon:'🎬', name:'Movie Star',           cat:'cool', base:290, swing:0.72, invest:1600, levelCost:980, desc:'Flops and blockbusters' },
+  { id:'singer',     icon:'🎤', name:'Famous Singer',        cat:'cool', base:120, swing:0.95, invest:900,  levelCost:900, desc:'The hardest dream of all', hardest:true },
+];
+const BIZ_BREAKTHROUGH = 0.09;  // chance a cool-biz run goes viral
+
+/* ---------------- school (for the kids) ---------------- */
+const SCHOOL = { grades:5, desc:'Kids attend until they graduate, just like a job.' };
 
 /* ---------------- stimulants (energy for happiness) ---------------- */
 const STIMULANTS = [

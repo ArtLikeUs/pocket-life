@@ -616,7 +616,7 @@ function drawActors(){
   drawPlayer();
 }
 function drawPlayer(){
-  if(S.atWork||S.hospital) return;
+  if(S.atWork||S.hospital||S.studying) return;
   const x=S.px-cam.x, y=S.py-cam.y;
   if(action&&action.woo){ drawCensor(); return; }
   const sleeping=action&&action.kind==='sleep';
@@ -780,11 +780,15 @@ function qprogress(ev,amt){
 function tick(dt){
   if(!S||paused) return;
   const sleeping=action&&action.kind==='sleep';
-  const mult=(S.atWork||S.hospital)?6:(sleeping?5:1);
+  const mult=(S.atWork||S.hospital||S.studying)?6:(sleeping?5:1);
   const dtMin=dt*2*speed*mult;
   S.minutes+=dtMin;
 
+  // kids attend school in the background even while you do your thing
+  if(S.kids) for(const k of S.kids){ if(k.atSchool){ k.atSchool.left-=dtMin; if(k.atSchool.left<=0) endKidSchool(k); } }
+
   if(S.atWork){ S.atWork.left-=dtMin; if(S.atWork.left<=0) endWork(); updateAwayChip(); return; }
+  if(S.studying){ S.studying.left-=dtMin; if(S.studying.left<=0) endStudy(); updateAwayChip(); return; }
   if(S.hospital){ S.hospital.left-=dtMin; if(S.hospital.left<=0) leaveHospital(); updateAwayChip(); return; }
 
   const n=S.needs;
@@ -1055,8 +1059,12 @@ function showKidSheet(idx){
   const k=S.kids[idx]; if(!k) return;
   sheetActions={};
   const stage=k.ageDays>=8?'Teen':'Child';
-  let body=sheetHead(k.ageDays>=8?'🧑':'🧒', k.name, stage+' · Happiness '+Math.round(k.happy||50)+'% · age '+k.ageDays+' days');
+  const eduTag = k.graduated?' · 🎓 graduated':(k.grade?' · grade '+k.grade+'/'+SCHOOL.grades:'');
+  let body=sheetHead(k.ageDays>=8?'🧑':'🧒', k.name, stage+' · Happy '+Math.round(k.happy||50)+'% · age '+k.ageDays+'d'+eduTag);
   const add=(icon,title,sub,id,fn)=>{ body+=item(icon,title,sub,null,`data-a="${id}"`); sheetActions[id]=fn; };
+  if(k.ageDays>=3 && !k.graduated){
+    add(k.atSchool?'⏳':'🏫', k.atSchool?'At school…':'Send to school', k.atSchool?'In class right now':'Grade '+(k.grade||0)+'/'+SCHOOL.grades+' · just like a job','sch',()=>{ closeSheet(); sendKidToSchool(idx); });
+  }
   add('🥏','Play together','+fun for you both','p',()=>{
     action={kind:'timed',icon:'🥏',label:'Playing with '+k.name,fx:{fun:22,social:16,energy:-5},total:20,left:20,
       done:()=>{ k.happy=clamp((k.happy||50)+18,0,100); burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); qprogress('kidplay'); addXP(14); toast('🥏 '+k.name+' loved it!'); }};
@@ -1171,8 +1179,75 @@ function enterBuilding(bid){
   if(bid==='mall'){ openShop(); return; }
   if(bid==='gym'){ showGym(); return; }
   if(bid==='hospital'){ showHospital(); return; }
+  if(bid==='university'){ showUniversity(); return; }
+  if(bid==='school'){ showSchool(); return; }
   if(bid==='nb1'){ showNPCSheet('ava'); return; }
   if(bid==='nb2'){ showNPCSheet('noah'); return; }
+}
+/* ----- college ----- */
+function showUniversity(){
+  sheetActions={};
+  let body=sheetHead('🎓','Maple University', COLLEGE.perk);
+  if(S.degree){
+    body+=`<p style="font-size:12px;color:#5ee07a;margin:6px 2px">🎓 You're a graduate! Your degree is boosting your career.</p>`;
+  } else if(S.eduCredits>0 || S._enrolled){
+    const done=S.eduCredits, total=COLLEGE.classes;
+    body+=`<p style="font-size:12px;color:#bdb6d6;margin:6px 2px">Classes done: <b>${done}/${total}</b>. Attend the rest to graduate.</p>`;
+    body+=item('📚','Attend a class','Builds toward your degree',null,'data-a="cls"');
+    sheetActions.cls=()=>{ closeSheet(); attendClass(); };
+  } else {
+    body+=`<p style="font-size:12px;color:#bdb6d6;margin:6px 2px">${COLLEGE.desc} Enrollment: <b style="color:#ffd76a">${COLLEGE.enroll}💰</b>.</p>`;
+    body+=item('✍️','Enroll now','then attend 4 classes',{txt:COLLEGE.enroll+'💰'},'data-a="enr"');
+    sheetActions.enr=()=>{ if(!spend(COLLEGE.enroll)){ return; } S._enrolled=true; SFX.coin(); toast('✍️ Enrolled at Maple U! Attend classes to graduate.'); showUniversity(); };
+  }
+  body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function attendClass(){
+  if(S.needs.energy<12){ toast('Too tired for class ⚡'); SFX.err(); return; }
+  S.studying={left:180}; toast('📚 In class…'); updateAwayChip();
+}
+function endStudy(){
+  S.studying=null;
+  const n=S.needs; n.energy=clamp(n.energy-16,4,100); n.fun=clamp(n.fun-12,4,100); n.social=clamp(n.social+6,0,100);
+  S.eduCredits++; addXP(30); SFX.good();
+  if(S.eduCredits>=COLLEGE.classes){
+    S.degree=true; S._enrolled=false; qprogress('degree');
+    burst(vw/2,vh/3,'confetti'); SFX.level();
+    toast('🎓 You graduated! Careers now pay more & cost less energy.');
+  } else {
+    toast('📚 Class done — '+S.eduCredits+'/'+COLLEGE.classes+' toward your degree');
+  }
+  updateAwayChip(); updateHUDNow(); save();
+}
+/* ----- school (kids) ----- */
+function showSchool(){
+  sheetActions={};
+  const schoolKids=(S.kids||[]).filter(k=>k.ageDays>=3 && k.grade<SCHOOL.grades);
+  let body=sheetHead('🏫','Town School', SCHOOL.desc);
+  if(!S.kids||!S.kids.length){ body+=`<p style="font-size:12.5px;color:#bdb6d6;margin-top:8px">No children yet. Start a family (👪) and they'll attend here once they're old enough.</p>`; }
+  else if(!schoolKids.length){ body+=`<p style="font-size:12.5px;color:#bdb6d6;margin-top:8px">Your kids are either too little or already graduated 🎓</p>`; }
+  else schoolKids.forEach(k=>{ const idx=S.kids.indexOf(k); const idk='sk'+idx;
+    body+=item(k.ageDays>=8?'🧑‍🎓':'🧒',k.name,'Grade '+k.grade+'/'+SCHOOL.grades+' · '+(k.atSchool?'in class':'send to school'),{txt:'Grade '+k.grade},`data-a="${idk}"`);
+    sheetActions[idk]=()=>{ closeSheet(); sendKidToSchool(idx); };
+  });
+  body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function sendKidToSchool(idx){
+  const k=S.kids[idx]; if(!k) return;
+  if(k.atSchool){ toast(k.name+' is already at school 📚'); return; }
+  if(k.grade>=SCHOOL.grades){ toast(k.name+' already graduated 🎓'); return; }
+  k.atSchool={left:240};
+  qprogress('school'); SFX.good();
+  toast('🏫 '+k.name+' is at school 📚'); save();
+}
+function endKidSchool(k){
+  k.atSchool=null; k.grade=(k.grade||0)+1;
+  k.happy=clamp((k.happy||50)+6,0,100);
+  if(k.grade>=SCHOOL.grades){ k.graduated=true; addXP(20); SFX.level(); burst(vw/2,vh/3,'confetti'); toast('🎓 '+k.name+' graduated from school!'); }
+  else toast('🏫 '+k.name+' finished grade '+k.grade+'/'+SCHOOL.grades);
+  save();
 }
 function showHospital(){
   sheetActions={};
@@ -1217,16 +1292,28 @@ function shiftPay(){
 }
 function shiftMinutes(){ return 300 + 60*Math.min(S.jobLvl,5); }   // higher rank = longer shift
 function showWorkSheet(){
-  if(!S.career){ showCareerBoard(true); return; }
   sheetActions={};
+  if(S.business){ showBusinessCenter(); return; }
+  if(!S.career){
+    let body=sheetHead('💼','Office','Pick a career — or strike out on your own.');
+    body+=item('📋','Career board','Pick a job (each has perks)',null,'data-a="board"');
+    body+=item('🏢','Start a business','Be your own boss (harder, no ceiling)',null,'data-a="biz"');
+    body+=`<p style="font-size:11.5px;color:#bdb6d6;margin:8px 2px">🎓 Tip: earn a degree at Maple University — it boosts career pay &amp; perks.</p>`;
+    sheetActions.board=()=>showCareerBoard(true);
+    sheetActions.biz=()=>showBusinessCenter();
+    body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
+    openSheet(body); bindSheet(); return;
+  }
   const c=CAREERS.find(x=>x.id===S.career);
-  let body=sheetHead(c.icon,'Office — '+jobTitle(),c.perk);
-  body+=`<p style="font-size:12px;color:#bdb6d6;margin:6px 2px">A shift pays ~${shiftPay()}💰 over ${Math.round(shiftMinutes()/60)}h. There's a quick task you can play for <b style="color:#5ee07a">+25% pay</b>. End shifts happy — 2 good shifts in a row = promotion (rank ${S.jobLvl}/${RANKS.length}: more pay, longer hours).</p>`;
-  body+=item('💼','Start a shift','Play a task for +25%, or skip','',`data-a="go"`);
+  let body=sheetHead(c.icon,'Office — '+jobTitle(),c.perk+(S.degree?' · 🎓 degree active':''));
+  body+=`<p style="font-size:12px;color:#bdb6d6;margin:6px 2px">A shift pays ~${shiftPay()}💰 over ${Math.round(shiftMinutes()/60)}h. Play the task for <b style="color:#5ee07a">+25% pay</b>. 2 good shifts in a row = promotion (rank ${S.jobLvl}/${RANKS.length}: more pay, longer hours).</p>`;
+  body+=item('💼','Start a shift','Play a task for +25%, or skip',null,'data-a="go"');
   sheetActions.go=()=>{ closeSheet(); beginWork(); };
-  body+=item('📋','Career board','Switch careers (rank resets)','',`data-a="board"`);
+  body+=item('📋','Career board','Switch careers (rank resets)',null,'data-a="board"');
   sheetActions.board=()=>showCareerBoard(false);
-  body+=item('✖️','Close','','',`data-a="x"`); sheetActions.x=closeSheet;
+  body+=item('🏢','Open a business instead','Quit the 9-5 & be your own boss',null,'data-a="biz"');
+  sheetActions.biz=()=>showBusinessCenter();
+  body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
   openSheet(body); bindSheet();
 }
 function showCareerBoard(first){
@@ -1274,11 +1361,14 @@ function runShift(bonus, won){
   updateAwayChip();
 }
 function endWork(){
+  const biz=S.atWork&&S.atWork.biz;
   const bonus=(S.atWork&&S.atWork.bonus)||1;
   S.atWork=null;
   const n=S.needs;
-  n.hunger=clamp(n.hunger-26,4,100); n.energy=clamp(n.energy-28,4,100); n.hygiene=clamp(n.hygiene-16,4,100);
+  const eDrain=Math.round(28*(S.degree?0.7:1));   // degree: shifts cost 30% less energy
+  n.hunger=clamp(n.hunger-26,4,100); n.energy=clamp(n.energy-eDrain,4,100); n.hygiene=clamp(n.hygiene-16,4,100);
   n.fun=clamp(n.fun-20,4,100); n.bladder=clamp(n.bladder-22,12,100); n.social=clamp(n.social+18,0,100);
+  if(biz){ endBizDay(); updateAwayChip(); save(); return; }
   const pay=Math.round(shiftPay()*bonus);
   addCoins(pay); SFX.coin(); burst(S.px-cam.x,S.py-cam.y-30,'coin','+'+pay+'💰');
   qprogress('work'); addXP(40);
@@ -1291,6 +1381,63 @@ function endWork(){
     }
   } else S.promoStreak=0;
   updateAwayChip(); save();
+}
+
+/* ----- business ----- */
+function bizRun(){
+  const b=S.business, def=BUSINESSES.find(x=>x.id===b.id);
+  const factor = 1 - def.swing + Math.random()*def.swing*2;     // 0-ish .. ~2x
+  let net = Math.round(def.base * b.level * factor * (S.degree?1.15:1));
+  let hit=false;
+  if(def.cat==='cool' && Math.random()<BIZ_BREAKTHROUGH){ net=Math.round(Math.abs(net)*(3+Math.random()*4)); hit=true; }
+  // a rough day can dip below the running costs → a loss
+  net -= Math.round(def.base*b.level*0.35);
+  return {net, hit, def};
+}
+function endBizDay(){
+  const {net,hit,def}=bizRun(); const b=S.business; b.days=(b.days||0)+1;
+  if(net>=0){ addCoins(net); SFX.coin(); burst(S.px-cam.x,S.py-cam.y-30,'coin','+'+net+'💰');
+    toast((hit?'🤩 '+def.name+' went viral! ':'🏢 '+def.name+' day done! ')+'+'+net+'💰');
+  } else { S.coins=Math.max(0,S.coins-Math.abs(net)); SFX.err();
+    toast('📉 Slow day at '+def.name+'. -'+Math.abs(net)+'💰'); }
+  addXP(hit?45:25); qprogress('biz');
+}
+function startBusiness(def){
+  if(!spend(def.invest)) return;
+  S.business={id:def.id, level:1, days:0};
+  S.career=null;   // business is your new path
+  SFX.level(); burst(vw/2,vh/3,'confetti'); addXP(30); qprogress('bizstart');
+  toast(def.icon+' You opened '+def.name+'! Run it from the Office 🏢'); save(); updateHUDNow();
+  closeSheet();
+}
+function showBusinessCenter(){
+  sheetActions={};
+  if(!S.business){
+    let body=sheetHead('🏢','Start a Business','Be your own boss — riskier than a job, but no ceiling. Cool gigs swing wild; the 🎤 Singer is the hardest.');
+    BUSINESSES.forEach(d=>{ const idk='b_'+d.id;
+      body+=item(d.icon,d.name+(d.hardest?' 🔥':''),(d.cat==='cool'?'Cool · ':'Steady · ')+d.desc,{txt:d.invest+'💰'},`data-a="${idk}"`);
+      sheetActions[idk]=()=>startBusiness(d);
+    });
+    body+=item('↩️','Back to jobs','',null,'data-a="back"'); sheetActions.back=()=>showWorkSheet();
+    openSheet(body); bindSheet(); return;
+  }
+  // manage existing business
+  const def=BUSINESSES.find(x=>x.id===S.business.id), b=S.business;
+  const lvlCost=Math.round(def.levelCost*b.level);
+  let body=sheetHead(def.icon, def.name+' — Lvl '+b.level, 'Avg/day ~'+Math.round(def.base*b.level)+'💰 · '+(def.cat==='cool'?'high risk/reward':'steady')+' · '+(b.days||0)+' days run');
+  body+=item('🏢','Run the business','A day of hustle — variable pay',null,'data-a="run"');
+  sheetActions.run=()=>{ closeSheet(); runBusiness(); };
+  body+=item('📈','Invest to grow','Lvl '+b.level+'→'+(b.level+1)+' · higher income',{txt:lvlCost+'💰'},'data-a="inv"');
+  sheetActions.inv=()=>{ if(!spend(lvlCost)) return; b.level++; SFX.level(); burst(vw/2,vh/2,'confetti'); addXP(15); toast('📈 '+def.name+' grew to level '+b.level+'!'); save(); showBusinessCenter(); };
+  body+=item('🔚','Close the business','Sell up & go back to jobs',null,'data-a="close"');
+  sheetActions.close=()=>{ if(!confirm('Close '+def.name+'?')) return; S.business=null; toast('You closed the business.'); save(); closeSheet(); };
+  body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function runBusiness(){
+  if(S.needs.energy<12){ toast('Too tired to run the business ⚡'); SFX.err(); return; }
+  S.atWork={left:shiftMinutes(), biz:true, bonus:1};
+  toast('🏢 Opening up shop…'); updateAwayChip();
 }
 
 /* ----- job mini-games ----- */
@@ -1355,7 +1502,8 @@ function mgSequence(area,status,finish){
     else { accepting=false; setTimeout(()=>finish(false),200); } });
 }
 function updateAwayChip(){ const c=el('awayChip');
-  if(S.atWork){ c.classList.add('show'); c.innerHTML='💼 At work…<small>'+Math.ceil(S.atWork.left/60)+'h left · earning</small>'; }
+  if(S.atWork){ const biz=S.atWork.biz; c.classList.add('show'); c.innerHTML=(biz?'🏢 Running the business…':'💼 At work…')+'<small>'+Math.ceil(S.atWork.left/60)+'h left · '+(biz?'hustling':'earning')+'</small>'; }
+  else if(S.studying){ c.classList.add('show'); c.innerHTML='🎓 In class…<small>earning your degree</small>'; }
   else if(S.hospital){ c.classList.add('show'); c.innerHTML='🏥 In the hospital…<small>recovering · the bill is coming</small>'; }
   else c.classList.remove('show'); }
 
@@ -1524,6 +1672,10 @@ function eligibleQuest(def){
   if(def.cond==='noVehicle'&&(S.vehicles&&S.vehicles.length)) return false;
   if(def.cond==='noCareer'&&S.career) return false;
   if(def.cond==='noOutfit'&&S.outfit) return false;
+  if(def.cond==='noDegree'&&S.degree) return false;
+  if(def.cond==='noBiz'&&S.business) return false;
+  if(def.cond==='hasBiz'&&!S.business) return false;
+  if(def.cond==='hasSchoolKid'&&!(S.kids||[]).some(k=>k.ageDays>=3)) return false;
   return true;
 }
 function rerollQuest(i){
@@ -1603,6 +1755,7 @@ function freshState(opts){
     coins:500, level:1, xp:0, promoStreak:0, minutes:8*60, milestones:[],
     homeTier:0, upgrades:{}, homeLv:{bed:0,tv:0,kitchen:0,decor:0,bath:0},
     career:null, jobLvl:1, wardrobe:[], outfit:null, baseShirt:opts.shirt,
+    degree:false, eduCredits:0, studying:null, business:null,
     vehicles:[], vehicle:null, gifts:{},
     rels:{}, partner:null, kids:[], quests:[], stats:{}, warned:{} };
   return s;
@@ -1624,13 +1777,18 @@ function normalize(s){
   s.baseShirt=s.baseShirt||s.shirt;
   s.gender=s.gender||'nb'; s.milestones=s.milestones||[];
   if(typeof s.hairStyle!=='number'||s.hairStyle<0||s.hairStyle>=HAIRSTYLES.length) s.hairStyle=0;
+  // wave 2: education + business
+  s.degree=s.degree||false; if(typeof s.eduCredits!=='number') s.eduCredits=0;
+  s.studying=s.studying||null; s.business=s.business||null;
+  for(const k of (s.kids||[])){ if(typeof k.grade!=='number') k.grade=0; k.atSchool=k.atSchool||null; if(typeof k.eduT!=='number') k.eduT=0; }
   if(!s.quests.length) { S=s; seedQuests(); }
   return s;
 }
 function jobTitle(){
-  if(!S.career) return 'Unemployed';
+  if(S.business){ const d=BUSINESSES.find(x=>x.id===S.business.id); return (d?d.name:'Business')+(S.business.level>1?' (Lv'+S.business.level+')':''); }
+  if(!S.career) return S.degree?'Graduate':'Unemployed';
   const c=CAREERS.find(x=>x.id===S.career);
-  return RANKS[Math.min(S.jobLvl-1,RANKS.length-1)]+' '+(c?c.name:'');
+  return (S.degree?'🎓 ':'')+RANKS[Math.min(S.jobLvl-1,RANKS.length-1)]+' '+(c?c.name:'');
 }
 
 function save(){ if(!S||!profileId) return; try{ localStorage.setItem('pl-save-'+profileId, JSON.stringify(S)); }catch(e){} }
@@ -1665,7 +1823,7 @@ function updateHUDNow(){ hudT=0; updateHUD(); }
 /*                        INPUT                                 */
 /* ============================================================ */
 cv.addEventListener('pointerdown',e=>{
-  if(!S||S.atWork||S.hospital||paused||transition>0) return;
+  if(!S||S.atWork||S.hospital||S.studying||paused||transition>0) return;
   if(!AC){ blip(1,0.001,'sine',0.0001); } // unlock audio on first touch
   const rect=cv.getBoundingClientRect();
   const wx=(e.clientX-rect.left)/scale+cam.x, wy=(e.clientY-rect.top)/scale+cam.y;
@@ -1706,12 +1864,12 @@ function drawMoveHint(){
 }
 
 /* buttons (wired from index via Game.* ) */
-function toggleOut(){ if(!S||S.atWork||S.hospital||transition>0) return; SFX.tap();
+function toggleOut(){ if(!S||S.atWork||S.hospital||S.studying||transition>0) return; SFX.tap();
   if(scene.type==='town') gotoScene('home', homeDef().spawn);
   else gotoScene('town', TOWN_SPAWN);
 }
-function quickWork(){ if(!S||S.hospital||S.atWork) return; SFX.tap();
-  if(scene.type==='town'){ const b=BUILDINGS.find(x=>x.id==='office'); goNextTo(b.door[0],b.door[1],()=>beginWork()); }
+function quickWork(){ if(!S||S.hospital||S.atWork||S.studying) return; SFX.tap();
+  if(scene.type==='town'){ const b=BUILDINGS.find(x=>x.id==='office'); goNextTo(b.door[0],b.door[1],()=>showWorkSheet()); }
   else { toast('Head out 🚪 to reach the office 💼'); }
 }
 function toggleSpeed(){ speed=speed===1?3:1; el('speedBtn').textContent=speed===1?'▶︎ 1×':'⏩ 3×'; }
@@ -1830,6 +1988,8 @@ return {
   toggleOut, quickWork, toggleSpeed, togglePause,
   openShop, openQuests, openFamily,
   startLoop:()=>requestAnimationFrame(loop),
-  _dbg:()=>({S, scene, homies, npcCount:npcSprites.length, rebuild:()=>{ if(scene.type==='home') buildHome(); else buildTown(); }}),
+  _dbg:()=>({S, scene, homies, npcCount:npcSprites.length, rebuild:()=>{ if(scene.type==='home') buildHome(); else buildTown(); },
+    enter:(bid)=>enterBuilding(bid), uni:()=>showUniversity(), biz:()=>showBusinessCenter(), school:()=>showSchool(),
+    endStudy:()=>endStudy(), bizDay:()=>{ S.atWork={biz:true,bonus:1}; endWork(); }}),
 };
 })();
