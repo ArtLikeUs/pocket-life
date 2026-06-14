@@ -179,12 +179,34 @@ function tickHomies(dt){
 
 function gotoScene(type, spawnTile){
   transition=1; transitionTo=()=>{
-    if(type==='home') buildHome(); else buildTown();
-    const sp = spawnTile || (type==='home'? homeDef().spawn : TOWN_SPAWN);
+    if(type==='home') buildHome(); else if(type==='vacation') buildVacation(); else buildTown();
+    const sp = spawnTile || (type==='home'? homeDef().spawn : type==='vacation'? (scene.vac?scene.vac.spawn:[7,7]) : TOWN_SPAWN);
     S.px=(sp[0]+.5)*T; S.py=(sp[1]+.5)*T; S.scene=type;
     path=[]; pending=null; action=null; pendingMove=null;
     centerCam(true);
   };
+}
+function buildVacation(){
+  const v=VACATIONS.find(x=>x.id===(S.vacay&&S.vacay.id));
+  if(!v){ buildTown(); return; }
+  const W=v.cols, H=v.rows, map=[];
+  for(let r=0;r<H;r++){ let row='';
+    for(let c=0;c<W;c++){ let ch='.'; const edge=(c===0||c===W-1||r===0||r===H-1); const h=_townHash(c,r);
+      if(v.theme==='beach'){ ch = r<=2?'w':'s'; }
+      else if(v.theme==='jungle'){ ch = edge?'T':(h>0.88?'T':'.'); if(c>=3&&c<=5&&r>=11&&r<=13) ch='w'; }
+      else if(v.theme==='resort'){ ch = (c>=6&&c<=10&&r>=4&&r<=7)?'w':(h>0.9?'p':'.'); }
+      else { ch = edge?'T':(h>0.9?'T':'.'); if(c>=10&&c<=13&&r>=3&&r<=5) ch='w'; }
+      row+=ch; }
+    map.push(row); }
+  const carve=(c,r)=>{ if(c>=0&&r>=0&&c<W&&r<H){ const a=map[r].split(''); a[c]=v.theme==='beach'?'s':'.'; map[r]=a.join(''); } };
+  for(const f of v.furn){ const meta=OBJTYPES[f.t]; for(const [dx,dy] of meta.fp) carve(f.c+dx,f.r+dy); carve(f.c,f.r+1); }
+  for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++) carve(v.spawn[0]+dx,v.spawn[1]+dy);
+  const solid=new Set(), furnAt=new Map(), doors=new Map();
+  for(let r=0;r<H;r++) for(let c=0;c<W;c++){ const ch=map[r][c]; if(ch==='T'||ch==='w') solid.add(c+','+r); }
+  const SOLIDV=['palm','cabana','tiki','ruins'];
+  for(const f of v.furn){ const meta=OBJTYPES[f.t]; const obj={...f,meta};
+    for(const [dx,dy] of meta.fp){ const k=(f.c+dx)+','+(f.r+dy); if(SOLIDV.indexOf(f.t)>=0) solid.add(k); furnAt.set(k,obj); } }
+  scene={type:'vacation', map, cols:W, rows:H, solid, furnAt, doors, theme:v.theme, vac:v};
 }
 
 /* ============================================================ */
@@ -259,8 +281,38 @@ function drawTerrain(){
   for(let r=Math.max(0,r0); r<r1; r++) for(let c=Math.max(0,c0); c<c1; c++){
     const x=c*T-cam.x, y=r*T-cam.y, ch=scene.map[r][c];
     if(scene.type==='town') drawTownTile(x,y,c,r,ch);
+    else if(scene.type==='vacation') drawVacTile(x,y,c,r,ch);
     else drawHomeTile(x,y,c,r,ch);
   }
+}
+function drawVacTile(x,y,c,r,ch){
+  const now=performance.now(), theme=scene.theme, h=hash(c,r);
+  let grass = theme==='jungle'?'#4f9a47' : theme==='mountain'?'#9ac3a8' : '#7bc86c';
+  if(ch==='s'){
+    ctx.fillStyle=(c+r)%2?'#f1e2b2':'#ecdaa4'; ctx.fillRect(x,y,T,T);
+    if(h>0.8){ ctx.fillStyle='#e3cd92'; ctx.fillRect(x+5+h*16,y+7+h*14,3,3); ctx.fillRect(x+20-h*8,y+20,2,2); }
+    if(h>0.95){ ctx.font='10px sans-serif'; ctx.fillText('🐚',x+8,y+22); }
+  } else if(ch==='w'){
+    ctx.fillStyle=COL.waterDk; ctx.fillRect(x,y,T,T); ctx.fillStyle=COL.water;
+    for(let i=0;i<3;i++){ const wy=y+4+i*11+Math.sin(now/520+c*1.3+i*2)*2; ctx.fillRect(x+1,wy,T-2,5); }
+    ctx.fillStyle='rgba(255,255,255,.4)'; ctx.fillRect(x+6+Math.sin(now/430+c)*3,y+9,6,1.6);
+  } else if(ch==='p'){
+    ctx.fillStyle='#e3d6c2'; ctx.fillRect(x,y,T,T);   // resort tiles
+    ctx.strokeStyle='rgba(255,255,255,.4)'; ctx.lineWidth=1; ctx.strokeRect(x+0.5,y+0.5,T-1,T-1);
+  } else if(ch==='T'){
+    ctx.fillStyle=grass; ctx.fillRect(x,y,T,T);
+    if(theme==='mountain') drawPine(x,y); else drawTree(x,y);
+  } else {
+    ctx.fillStyle=(c+r)%2?grass:shade(grass,0.95); ctx.fillRect(x,y,T,T);
+    if(theme==='mountain'&&h>0.9){ ctx.fillStyle='rgba(255,255,255,.6)'; ctx.fillRect(x+6+h*14,y+8+h*12,3,3); } // snow flecks
+    if(theme==='jungle'&&h>0.85){ ctx.fillStyle='#3f7d38'; for(let i=0;i<4;i++){ const gx=x+5+i*7; ctx.beginPath(); ctx.moveTo(gx,y+T-3); ctx.lineTo(gx-2,y+T-12); ctx.lineTo(gx+2,y+T-12); ctx.closePath(); ctx.fill(); } }
+  }
+}
+function drawPine(x,y){
+  ctx.fillStyle=COL.treeTrunk; ctx.fillRect(x+T/2-2,y+T-9,4,9);
+  ctx.fillStyle='#2f6b3d'; ctx.beginPath(); ctx.moveTo(x+T/2,y+3); ctx.lineTo(x+5,y+T-8); ctx.lineTo(x+T-5,y+T-8); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#3d8050'; ctx.beginPath(); ctx.moveTo(x+T/2,y+7); ctx.lineTo(x+8,y+T-14); ctx.lineTo(x+T-8,y+T-14); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.5)'; ctx.beginPath(); ctx.moveTo(x+T/2,y+3); ctx.lineTo(x+T/2-3,y+9); ctx.lineTo(x+T/2+3,y+9); ctx.closePath(); ctx.fill();
 }
 function drawTownTile(x,y,c,r,ch){
   const now=performance.now();
@@ -532,6 +584,39 @@ function drawFurn(t,x,y,o){
       box(x+3,y+3,2*T-6,2*T-6,12,'#9aa6b2'); rr(x+9,y+9,2*T-18,2*T-18,10,COL.water);
       ctx.fillStyle='#cfeaf6'; ctx.beginPath(); ctx.arc(x+T,y+T,5,0,7); ctx.fill();
       for(let i=0;i<6;i++){ const a=performance.now()/300+i; ctx.fillStyle='rgba(255,255,255,.6)'; ctx.fillRect(x+T+Math.cos(a)*10, y+T+Math.sin(a)*10-6,2,2); } break; }
+    case 'palm': {
+      ctx.fillStyle=COL.treeTrunk; ctx.fillRect(x+T/2-2,y+T-16,4,16);
+      ctx.fillStyle='#3f9d5a'; for(const a of [-0.9,-0.3,0.3,0.9,2.4,3.7]){ ctx.beginPath(); ctx.ellipse(x+T/2+Math.cos(a)*10,y+T-16+Math.sin(a)*7,9,4,a,0,7); ctx.fill(); }
+      ctx.fillStyle='#7a4a2a'; ctx.beginPath(); ctx.arc(x+T/2,y+T-16,3,0,7); ctx.fill(); break; }
+    case 'cabana': {
+      ctx.fillStyle='#c9a06a'; ctx.fillRect(x+5,y+T*0.55,3,T*0.4); ctx.fillRect(x+2*T-8,y+T*0.55,3,T*0.4);
+      box(x+4,y+T*0.55,2*T-8,T*0.3,5,'#e0c089');
+      ctx.fillStyle='#c0563f'; ctx.beginPath(); ctx.moveTo(x+1,y+T*0.55); ctx.lineTo(x+T,y+6); ctx.lineTo(x+2*T-1,y+T*0.55); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle=COL.outline; ctx.lineWidth=1.5; ctx.stroke(); break; }
+    case 'lounger': { box(x+4,y+T*0.5,T-8,T*0.32,4,'#e6e1d2'); ctx.fillStyle='#9fd8ec'; ctx.fillRect(x+6,y+T*0.5+2,T-12,4);
+      ctx.fillStyle='#cbb48f'; ctx.fillRect(x+6,y+T*0.82,3,5); ctx.fillRect(x+T-9,y+T*0.82,3,5); break; }
+    case 'tiki': { box(x+4,y+T*0.5,2*T-8,T*0.34,4,'#7a4a2a'); ctx.fillStyle='#caa15e'; for(let i=0;i<6;i++) ctx.fillRect(x+8+i*7,y+T*0.5,2,T*0.34);
+      ctx.fillStyle='#3f9d5a'; ctx.beginPath(); ctx.moveTo(x+2,y+T*0.5); ctx.lineTo(x+T,y+8); ctx.lineTo(x+2*T-2,y+T*0.5); ctx.closePath(); ctx.fill();
+      ctx.font='12px sans-serif'; ctx.fillText('🍹',x+2*T-16,y+T*0.5+12); break; }
+    case 'ruins': {
+      ctx.fillStyle='#9a9384'; ctx.fillRect(x+4,y+T*0.6,8,1.4*T); ctx.fillRect(x+2*T-12,y+T*0.6,8,1.4*T);
+      box(x+2,y+T*0.5,2*T-4,T*0.3,2,'#aaa294');
+      ctx.fillStyle='#8a8475'; ctx.fillRect(x+T-3,y+T*0.8,6,T); ctx.fillStyle='#7e7869'; ctx.fillRect(x+6,y+2*T-6,2*T-12,6); break; }
+    case 'campfire': {
+      ctx.fillStyle='#6b4a2f'; ctx.fillRect(x+8,y+T-12,T-16,4); ctx.fillRect(x+T/2-2,y+T-16,4,10);
+      const f=performance.now()/120; ctx.fillStyle='#ff7b3d'; ctx.beginPath(); ctx.moveTo(x+T/2,y+6+Math.sin(f)*2); ctx.lineTo(x+T/2-7,y+T-10); ctx.lineTo(x+T/2+7,y+T-10); ctx.closePath(); ctx.fill();
+      ctx.fillStyle='#ffd24d'; ctx.beginPath(); ctx.moveTo(x+T/2,y+12+Math.sin(f+1)*2); ctx.lineTo(x+T/2-4,y+T-10); ctx.lineTo(x+T/2+4,y+T-10); ctx.closePath(); ctx.fill(); break; }
+    case 'treasure': {
+      const got=(S.vacay&&(S.vacay.found||[]).indexOf(o.c+','+o.r)>=0);
+      if(got){ box(x+7,y+T-13,T-14,9,2,'#8a6a3a'); ctx.fillStyle='#5a4a2a'; ctx.fillRect(x+9,y+T-11,T-18,5); }
+      else { const bob=Math.sin(performance.now()/400+o.c)*1.5; box(x+7,y+T-15+bob,T-14,11,2,'#caa15e');
+        ctx.fillStyle='#ffd76a'; ctx.fillRect(x+9,y+T-13+bob,T-18,3); ctx.font='12px sans-serif'; ctx.textAlign='center'; ctx.fillText('❓',x+T/2,y+T-2+bob); ctx.textAlign='left'; } break; }
+    case 'excursion': {
+      box(x+5,y+6,T-10,T-12,3,'#5b8fd6'); ctx.fillStyle='#fff'; ctx.font='13px sans-serif'; ctx.textAlign='center';
+      ctx.fillText(o.ex&&scene.vac?((scene.vac.excursions.find(e=>e.id===o.ex)||{}).icon||'🎟️'):'🎟️',x+T/2,y+T/2+5); ctx.textAlign='left'; break; }
+    case 'return': {
+      ctx.fillStyle='#8a8475'; ctx.fillRect(x+T/2-2,y+10,4,T-12); box(x+4,y+4,T-8,12,3,'#5b8fd6');
+      ctx.font='11px sans-serif'; ctx.textAlign='center'; ctx.fillStyle='#fff'; ctx.fillText('✈️',x+T/2,y+14); ctx.textAlign='left'; break; }
     default: box(x+5,y+5,T-10,T-10,4,'#8a7a9a');
   }
 }
@@ -835,7 +920,7 @@ function tick(dt){
     if(n[d.k]>28) S.warned[d.k]=false;
   }
   // total collapse → hospital (energy gone, or 3+ needs bottomed out)
-  if(!S.hospital&&!S.atWork){
+  if(!S.hospital&&!S.atWork&&!S.studying&&scene&&scene.type!=='vacation'){
     const zeros=NEEDS.filter(d=>n[d.k]<=1).length;
     if(n.energy<=0.5||zeros>=3) hospitalize();
   }
@@ -1101,6 +1186,16 @@ function showObjectSheet(o,key){
   else if(t==='picnic'){ add('🧺','Have a picnic','+fun +social, relaxing','p',()=>doAct(o,key,'🧺','Picnicking',{fun:24,social:16,hunger:14},25,()=>{ qprogress('activity'); }));
     add('☀️','Sunbathe','+fun, recharge a little','s',()=>doAct(o,key,'😎','Sunbathing',{fun:16,energy:8},20)); }
   else if(t==='bench'){ add('🪑','Rest a while','+energy +fun','x',()=>doAct(o,key,'😌','Resting',{energy:18,fun:8},18,()=>{ qprogress('activity'); })); }
+  else if(t==='treasure'){ const got=(S.vacay&&(S.vacay.found||[]).indexOf(key)>=0);
+    if(got) add('✓','Already found','You dug this one up','x',()=>{ closeSheet(); });
+    else add('⛏️','Dig it up!','Something glints in the sand…','x',()=>collectTreasure(o,key)); }
+  else if(t==='excursion'){ const ex=(scene.vac.excursions||[]).find(e=>e.id===o.ex)||{};
+    add(ex.icon||'🎟️','Book: '+(ex.name||'Excursion'), (ex.price||0)+'💰 · +'+(ex.fun||0)+' fun'+(ex.energy?' '+(ex.energy>0?'+':'')+ex.energy+' energy':''),'x',()=>doExcursion(o,key)); }
+  else if(t==='return'){ add('✈️','Fly home','Head back, rested & happy','x',()=>{ closeSheet(); flyHome(); }); }
+  else if(t==='lounger'||t==='cabana'){ add('🌞','Soak up the sun','+fun +energy, pure bliss','x',()=>doAct(o,key,'😎','Lounging',{fun:24,energy:14},25)); }
+  else if(t==='tiki'){ add('🍹','Order a drink','12💰 · +fun +social','x',()=>{ if(!spend(12)) return; doAct(o,key,'🍹','Sipping a cocktail',{fun:22,social:12},18); }); }
+  else if(t==='campfire'){ add('🔥','Warm up by the fire','+fun +social','x',()=>doAct(o,key,'🔥','By the campfire',{fun:20,social:16},20)); }
+  else if(t==='palm'||t==='ruins'){ add(m.icon,'Take it in',m.desc,'x',()=>{ closeSheet(); S.needs.fun=clamp(S.needs.fun+8,0,100); toast(m.icon+' '+m.desc); }); }
   else { add(m.icon,'Inspect',m.desc,'x',()=>{ closeSheet(); S.needs.fun=clamp(S.needs.fun+4,0,100); toast(m.icon+' '+m.desc); }); }
 
   add('✖️','Close','','close',closeSheet);
@@ -1333,6 +1428,7 @@ function enterBuilding(bid){
   if(bid==='arcade'){ showActivity('🕹️','Pixel Arcade','Blow off steam on the machines!',ARCADE_GAMES,'fit'); return; }
   if(bid==='library'){ showActivity('📚','Town Library','Free to browse. Quiet, please.',LIBRARY_BOOKS,null); return; }
   if(bid==='cafe'){ showActivity('☕','Cozy Cafe','Treats, drinks & good vibes.',CAFE_MENU,'coffee'); return; }
+  if(bid==='travel'){ showTravelAgency(); return; }
   if(bid==='nb1'){ showNPCSheet('ava'); return; }
   if(bid==='nb2'){ showNPCSheet('noah'); return; }
 }
@@ -1424,6 +1520,58 @@ function showDiner(){
       applyFx(fx); burst(S.px-cam.x,S.py-cam.y-34,'spark','+'+f.hunger+'🍗'); SFX.eat(); S.stats.eat=(S.stats.eat||0)+1; qprogress('eat'); if(f.id==='coffee') qprogress('coffee'); addXP(6); toast('Enjoyed '+f.name+'!'); closeSheet(); }; });
   body+=item('✖️','Close','','',`data-a="x"`); sheetActions.x=closeSheet;
   openSheet(body); bindSheet();
+}
+/* ----- vacations ----- */
+function showTravelAgency(){
+  sheetActions={};
+  let body=sheetHead('✈️','Travel Agency','Book a getaway — explore, find hidden treasures & come home rested.');
+  VACATIONS.forEach(v=>{ const idk='v_'+v.id;
+    body+=item(v.icon,v.name,v.desc+' · '+v.furn.filter(f=>f.t==='treasure').length+' treasures · '+v.excursions.length+' excursions',{txt:v.price+'💰'},`data-a="${idk}"`);
+    sheetActions[idk]=()=>flyTo(v);
+  });
+  body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function flyTo(v){
+  if(!spend(v.price)) return;
+  S.vacay={id:v.id, found:[], excursions:[]};
+  closeSheet(); qprogress('vacation'); addXP(20); SFX.level();
+  toast('✈️ Off to '+v.name+'! '+v.icon);
+  gotoScene('vacation', v.spawn);
+}
+function flyHome(){
+  const found=(S.vacay&&S.vacay.found.length)||0, did=(S.vacay&&S.vacay.excursions.length)||0;
+  const n=S.needs;
+  n.fun=clamp(n.fun+40+found*4+did*6,0,100); n.energy=clamp(n.energy+25,0,100);
+  n.social=clamp(n.social+20,0,100); n.hygiene=clamp(n.hygiene+10,0,100);
+  if(S.partner) rel(S.partner,8);
+  S.vacay=null; addXP(15); SFX.good();
+  toast('🏡 Home, recharged! Found '+found+' treasure'+(found===1?'':'s')+'.');
+  gotoScene('town', TOWN_SPAWN);
+}
+function collectTreasure(o,key){
+  S.vacay.found=S.vacay.found||[];
+  if(S.vacay.found.indexOf(key)>=0){ toast('Already dug up here ⛏️'); closeSheet(); return; }
+  const loot=TREASURE_LOOT[Math.floor(Math.random()*TREASURE_LOOT.length)];
+  S.vacay.found.push(key);
+  addCoins(loot.coins); if(loot.gift){ S.gifts[loot.gift]=(S.gifts[loot.gift]||0)+1; }
+  if(loot.fun) S.needs.fun=clamp(S.needs.fun+loot.fun,0,100);
+  burst(S.px-cam.x,S.py-cam.y-30,'coin','+'+loot.coins+'💰'); SFX.coin(); addXP(loot.xp||16);
+  qprogress('treasure');
+  toast('🎉 You found '+loot.icon+' '+loot.name+'! +'+loot.coins+'💰'); closeSheet();
+}
+function doExcursion(o,key){
+  const v=scene.vac; const ex=v.excursions.find(e=>e.id===o.ex); if(!ex) return;
+  if(!spend(ex.price)){ return; }
+  const fx={fun:ex.fun||0}; if(ex.social) fx.social=ex.social; if(ex.energy) fx.energy=ex.energy;
+  S.vacay.excursions=S.vacay.excursions||[]; if(S.vacay.excursions.indexOf(o.ex)<0) S.vacay.excursions.push(o.ex);
+  action={kind:'timed', icon:ex.icon, label:ex.name, fx, total:30, left:30,
+    done:()=>{ burst(S.px-cam.x,S.py-cam.y-30,'spark','+'+(ex.fun||0)+'🎉'); SFX.good(); addXP(18); qprogress('excursion');
+      // an excursion can uncover a bonus treasure nearby
+      const hidden=[...scene.furnAt.values()].find(f=>f.t==='treasure' && (S.vacay.found.indexOf(f.c+','+f.r)<0));
+      if(hidden && Math.random()<0.5){ toast('🗺️ The guide points out a hidden treasure nearby!'); }
+      toast('✨ '+ex.name+' — unforgettable!'); } };
+  closeSheet();
 }
 function showActivity(icon,title,sub,menu,questEv){
   sheetActions={};
@@ -1952,6 +2100,7 @@ function freshState(opts){
     present:NPCS.map(n=>n.id), movedAway:{}, lastDay:1,
     age:START_AGE, lifespan:Math.round(LIFE_MIN+Math.random()*(LIFE_MAX-LIFE_MIN)),
     members:[], mid:'founder', role:'You', surname:FAMILY_SURNAMES[Math.floor(Math.random()*FAMILY_SURNAMES.length)], generation:1,
+    vacay:null,
     vehicles:[], vehicle:null, gifts:{},
     rels:{}, partner:null, kids:[], quests:[], stats:{}, warned:{} };
   return s;
@@ -1985,6 +2134,7 @@ function normalize(s){
   s.surname=s.surname||FAMILY_SURNAMES[Math.floor(Math.random()*FAMILY_SURNAMES.length)];
   if(typeof s.generation!=='number') s.generation=1;
   s.stats=s.stats||{}; if(typeof s.stats.peakCoins!=='number') s.stats.peakCoins=Math.floor(s.coins||0);
+  if(s.vacay===undefined) s.vacay=null;
   // migrate an existing spouse (NPC partner) into a controllable member
   if(s.partner && !s.members.some(m=>m.role==='Partner')){
     const pn=(NPCS.find(n=>n.id===s.partner)); if(pn) s.members.push(makeMember(pn,'Partner',s.age));
@@ -2043,8 +2193,10 @@ function showMemberSheet(mid){
 
 function save(){ if(!S||!profileId) return; try{ localStorage.setItem('pl-save-'+profileId, JSON.stringify(S)); }catch(e){} }
 function rebuildAll(){
-  if(S.scene==='town') buildTown(); else buildHome();
-  const sp=S.scene==='town'?TOWN_SPAWN:homeDef().spawn;
+  if(S.scene==='vacation' && S.vacay) buildVacation();
+  else if(S.scene==='town') buildTown();
+  else { S.scene='home'; buildHome(); }
+  const sp=S.scene==='vacation'?(scene.vac?scene.vac.spawn:[7,7]):S.scene==='town'?TOWN_SPAWN:homeDef().spawn;
   if(!S.px){ S.px=(sp[0]+.5)*T; S.py=(sp[1]+.5)*T; }
   buildNeedsUI(); centerCam(true); refreshLifeDot(); updateAwayChip();
 }
@@ -2065,7 +2217,7 @@ function updateHUD(){
   el('clock').innerHTML='<b>Day '+day+'</b><br>'+hh+':'+mm;
   el('coins').textContent='💰 '+Math.floor(S.coins);
   el('xpBar').style.width=(S.xp/(80+S.level*40)*100)+'%';
-  el('outBtn').innerHTML = scene&&scene.type==='town' ? '🏠 Home' : '🚪 Go Out';
+  el('outBtn').innerHTML = scene&&scene.type==='vacation' ? '✈️ Fly Home' : scene&&scene.type==='town' ? '🏠 Home' : '🚪 Go Out';
 }
 function updateHUDNow(){ hudT=0; updateHUD(); }
 
@@ -2114,10 +2266,12 @@ function drawMoveHint(){
 
 /* buttons (wired from index via Game.* ) */
 function toggleOut(){ if(!S||S.atWork||S.hospital||S.studying||transition>0) return; SFX.tap();
-  if(scene.type==='town') gotoScene('home', homeDef().spawn);
+  if(scene.type==='vacation') flyHome();
+  else if(scene.type==='town') gotoScene('home', homeDef().spawn);
   else gotoScene('town', TOWN_SPAWN);
 }
 function quickWork(){ if(!S||S.hospital||S.atWork||S.studying) return; SFX.tap();
+  if(scene.type==='vacation'){ toast("You're on vacation — enjoy it! 🌴"); return; }
   if(scene.type==='town'){ const b=BUILDINGS.find(x=>x.id==='office'); goNextTo(b.door[0],b.door[1],()=>showWorkSheet()); }
   else { toast('Head out 🚪 to reach the office 💼'); }
 }
@@ -2243,6 +2397,10 @@ return {
     enter:(bid)=>enterBuilding(bid), uni:()=>showUniversity(), biz:()=>showBusinessCenter(), school:()=>showSchool(),
     endStudy:()=>endStudy(), bizDay:()=>{ S.atWork={biz:true,bonus:1}; endWork(); },
     pathLen:()=>path.length, pending:()=>pendingMove, stepSim:(n)=>{ for(let i=0;i<(n||30);i++){ moveSim(0.05); } },
-    ageUp:(n)=>ageEveryone(n||1), die:()=>{ S.age=S.lifespan+1; checkDeaths(); }, switchTo:(mid)=>switchTo(mid), passOn:()=>passOn()}),
+    ageUp:(n)=>ageEveryone(n||1), die:()=>{ S.age=S.lifespan+1; checkDeaths(); }, switchTo:(mid)=>switchTo(mid), passOn:()=>passOn(),
+    travel:()=>showTravelAgency(), fly:(id)=>flyTo(VACATIONS.find(v=>v.id===id)), flyHome:()=>flyHome(),
+    forceScene:(t)=>{ S.scene=t; if(t==='vacation') buildVacation(); else if(t==='town') buildTown(); else buildHome();
+      const v=scene.vac, sp=t==='vacation'?(v?v.spawn:[7,7]):t==='town'?TOWN_SPAWN:homeDef().spawn;
+      S.px=(sp[0]+.5)*T; S.py=(sp[1]+.5)*T; transition=0; centerCam(true); }}),
 };
 })();

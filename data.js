@@ -168,10 +168,11 @@ const BUILDINGS = [
   { id:'school',     label:'Town School', sign:'🏫', x:2,  y:15, w:5, h:4, wall:'#e6b35a', roof:'#9a4f2f', door:[4,18] },
   { id:'university', label:'Maple University', sign:'🎓', x:20, y:14, w:5, h:4, wall:'#9aa6d0', roof:'#3a3f6e', door:[22,17] },
   { id:'cafe',   label:'Cozy Cafe', sign:'☕', x:9,  y:22, w:4, h:3, wall:'#cf9b6a', roof:'#7a4a2a', door:[10,24] },
+  { id:'travel', label:'Travel Agency', sign:'✈️', x:25, y:22, w:5, h:3, wall:'#7fb0d6', roof:'#34618a', door:[27,24] },
 ];
 const TOWN_FURN = [
   {t:'fountain',c:14,r:23},
-  {t:'bench',c:9,r:20},{t:'bench',c:19,r:22},{t:'bench',c:25,r:24},
+  {t:'bench',c:9,r:20},{t:'bench',c:19,r:22},{t:'bench',c:31,r:24},
   {t:'picnic',c:16,r:21},{t:'picnic',c:21,r:25},
 ];
 const TOWN_SPAWN = [4,6];   // outside your front door
@@ -297,6 +298,9 @@ const QUEST_POOL = [
   { id:'school1',  icon:'🏫', txt:'Send a child to school',       ev:'school',   n:1, coin:70,  xp:45,  cond:'hasSchoolKid' },
   { id:'fun3',     icon:'🎟️', txt:'Enjoy 3 town activities',       ev:'activity', n:3, coin:90,  xp:55 },
   { id:'perk1',    icon:'🎁', txt:'Unlock a friend perk (50❤)',    ev:'perkunlock', n:1, coin:160, xp:100 },
+  { id:'vacay1',   icon:'✈️', txt:'Take a vacation',               ev:'vacation',  n:1, coin:120, xp:70 },
+  { id:'treasure1',icon:'💎', txt:'Find 3 hidden treasures',       ev:'treasure',  n:3, coin:150, xp:90 },
+  { id:'excursion1',icon:'🎟️', txt:'Book an excursion',            ev:'excursion', n:1, coin:100, xp:60 },
 ];
 
 /* ---------------- furniture footprints & meta ---------------- */
@@ -330,7 +334,62 @@ const OBJTYPES = {
   bench:     { name:'Park Bench',  icon:'🪑', desc:'Best people-watching seat.', fp:[[0,0],[1,0]] },
   fountain:  { name:'Fountain',    icon:'⛲', desc:'Make a wish — 1💰 a toss.', fp:[[0,0],[1,0],[0,1],[1,1]] },
   picnic:    { name:'Picnic Table', icon:'🧺', desc:'A lovely spot for a bite outdoors.', fp:[[0,0],[1,0]] },
+  // vacation landmarks & interactables
+  palm:      { name:'Palm Tree',   icon:'🌴', desc:'Swaying in the breeze.', fp:[[0,0]] },
+  cabana:    { name:'Cabana',      icon:'⛱️', desc:'Shade and a comfy seat.', fp:[[0,0],[1,0]] },
+  lounger:   { name:'Sun Lounger', icon:'🏖️', desc:'Soak up the sun.', fp:[[0,0]] },
+  tiki:      { name:'Tiki Bar',    icon:'🍹', desc:'Tropical drinks, served cold.', fp:[[0,0],[1,0]] },
+  ruins:     { name:'Ancient Ruins', icon:'🏛️', desc:'Mysteries of ages past.', fp:[[0,0],[1,0],[0,1],[1,1]] },
+  campfire:  { name:'Campfire',    icon:'🔥', desc:'Warm, crackling, cozy.', fp:[[0,0]] },
+  treasure:  { name:'Hidden Treasure', icon:'❓', desc:'Something glints here…', fp:[[0,0]] },
+  excursion: { name:'Excursion',   icon:'🎟️', desc:'Book an adventure!', fp:[[0,0]] },
+  return:    { name:'Departures',  icon:'✈️', desc:'Head back home.', fp:[[0,0]] },
 };
+
+/* ---------------- vacations (Wave 5) ----------------
+   Book a trip → travel to a themed, explorable map. Tap hidden treasures and
+   do excursions; fly home rested. Terrain is generated per `theme` in engine. */
+const VACATIONS = [
+  { id:'beach', name:'Sunny Beach', icon:'🏖️', price:600, theme:'beach', cols:15, rows:15, days:2,
+    desc:'Sun, sand & salty air', spawn:[7,12],
+    excursions:[ {id:'snorkel', icon:'🤿', name:'Go Snorkeling', price:120, fun:42, social:12},
+                 {id:'jetski',  icon:'🌊', name:'Rent a Jet Ski', price:160, fun:50, energy:-8} ],
+    furn:[ {t:'palm',c:2,r:5},{t:'palm',c:12,r:6},{t:'palm',c:4,r:9},{t:'cabana',c:9,r:10},{t:'lounger',c:6,r:10},
+      {t:'excursion',c:4,r:4,ex:'snorkel'},{t:'excursion',c:11,r:9,ex:'jetski'},
+      {t:'treasure',c:13,r:4},{t:'treasure',c:2,r:11},{t:'treasure',c:8,r:6},
+      {t:'return',c:7,r:13} ] },
+  { id:'jungle', name:'Jungle Trek', icon:'🌴', price:900, theme:'jungle', cols:16, rows:16, days:3,
+    desc:'Wild green & ancient ruins', spawn:[8,13],
+    excursions:[ {id:'zipline', icon:'🪢', name:'Zipline Tour', price:180, fun:52, energy:-10},
+                 {id:'safari',  icon:'🐘', name:'Wildlife Safari', price:200, fun:46, social:14} ],
+    furn:[ {t:'ruins',c:7,r:4},{t:'campfire',c:8,r:10},{t:'palm',c:2,r:7},{t:'palm',c:13,r:8},
+      {t:'excursion',c:3,r:4,ex:'zipline'},{t:'excursion',c:12,r:11,ex:'safari'},
+      {t:'treasure',c:5,r:3},{t:'treasure',c:13,r:4},{t:'treasure',c:2,r:12},{t:'treasure',c:10,r:7},
+      {t:'return',c:8,r:14} ] },
+  { id:'resort', name:'Luxury Resort', icon:'🏝️', price:1500, theme:'resort', cols:16, rows:15, days:3,
+    desc:'Poolside pampering, all-inclusive', spawn:[8,12],
+    excursions:[ {id:'spa',   icon:'💆', name:'Spa Day', price:220, fun:40, energy:30},
+                 {id:'sail',  icon:'⛵', name:'Sunset Sail', price:260, fun:54, social:18} ],
+    furn:[ {t:'tiki',c:12,r:4},{t:'lounger',c:4,r:10},{t:'lounger',c:6,r:10},{t:'cabana',c:11,r:10},{t:'palm',c:2,r:5},
+      {t:'excursion',c:3,r:4,ex:'spa'},{t:'excursion',c:13,r:11,ex:'sail'},
+      {t:'treasure',c:14,r:3},{t:'treasure',c:2,r:12},{t:'treasure',c:8,r:5},
+      {t:'return',c:8,r:13} ] },
+  { id:'mountain', name:'Mountain Lodge', icon:'🏔️', price:1100, theme:'mountain', cols:16, rows:16, days:3,
+    desc:'Crisp air & cozy fires', spawn:[8,13],
+    excursions:[ {id:'ski',   icon:'🎿', name:'Hit the Slopes', price:190, fun:50, energy:-12},
+                 {id:'hot',   icon:'♨️', name:'Hot Springs', price:170, fun:38, energy:26} ],
+    furn:[ {t:'cabana',c:8,r:10},{t:'campfire',c:6,r:11},{t:'palm',c:2,r:6},{t:'palm',c:13,r:7},
+      {t:'excursion',c:3,r:5,ex:'ski'},{t:'excursion',c:12,r:11,ex:'hot'},
+      {t:'treasure',c:5,r:3},{t:'treasure',c:13,r:4},{t:'treasure',c:3,r:12},{t:'treasure',c:11,r:6},
+      {t:'return',c:8,r:14} ] },
+];
+const TREASURE_LOOT = [   // a hidden treasure gives one of these
+  {icon:'💰', name:'buried coins', coins:180, xp:20},
+  {icon:'💎', name:'a hidden gem', coins:320, xp:30},
+  {icon:'🐚', name:'a rare shell', coins:90,  xp:14, fun:8},
+  {icon:'🗺️', name:'an old map piece', coins:140, xp:24},
+  {icon:'🎁', name:'a lost souvenir', coins:60, xp:12, gift:'flowers'},
+];
 
 /* needs config */
 const NEEDS = [
