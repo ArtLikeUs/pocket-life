@@ -60,18 +60,18 @@ Current versions: **assets `?v=17`, sw `pocket-life-v13`** (next edit → v=18 /
 2. **Careers & Education:** 6 careers + job mini-games (+25% pay) + promotions; College (degree); Businesses (blue-collar + "cool" incl. Famous Singer, viral breakthroughs, losses); School for kids.
 3. **Living Town:** bigger 34×30 map; Cinema/Arcade/Library/Cafe + park activities; NPC occupations + relationship-perk discounts; residents move away/in over time.
 4. **Generations:** aging/lifespans, switch control between family members, death → rebirth-into-lineage OR 100-year legacy story.
+5. **Vacations:** Travel Agency books trips; 4 procedurally-generated themed maps (beach/jungle/resort/mountain) with hidden treasures (tap to dig up) and excursions; fly home with a relaxation bonus.
 
-## 7. NEXT: Wave 5 — Vacations (not started)
-What the owner asked for (verbatim intent): *"buy vacations to beaches, jungles, resorts & other places. Buy the trip, then buy additional excursions and benefits that increase the trip's benefits. Maps built for each vacation spot with rewards hidden for exploration & doing the added benefits."*
+## 7. Status: the original 5-wave roadmap is COMPLETE ✅
+All five waves the owner asked for are built, tested, and live. There is **no Wave 6 planned** —
+future work is polish/balance/new content, not a scheduled wave. If the owner asks for more,
+treat it as a fresh feature request.
 
-Suggested implementation sketch (consistent with current architecture):
-- **Data (`data.js`):** a `VACATIONS` array — each `{id, name, icon, price, scene-map (generated or authed terrain like the town), excursions:[{name, price, benefit}], hiddenRewards:[{tile, reward}]}`. Beaches/jungle/resort/etc.
-- **A travel hub:** add a building (e.g., "Airport ✈️" or a Travel Agency in town, or a Shop tab) to buy a trip; gate by coins.
-- **Vacation scene:** reuse the scene system — add `scene.type==='vacation'` with its own generated map (same tile vocabulary: grass/path/water/tree/flowers + new ones like sand). Camera/pathfinding already generic. Player explores; **hidden rewards** = special tiles that grant coins/XP/items when first stepped on or tapped (track found ones in `S.vacationProgress`).
-- **Excursions/benefits:** buyable per-trip add-ons (like business "invest") that boost the trip's need/fun/relationship payoff and may unlock more map/rewards.
-- **Return home** when the trip's days are spent (mirror `S.atWork` fast-forward or a "days left" counter), applying accumulated benefits.
-- Add Wave-5 quests to `QUEST_POOL` (e.g., "Take a vacation", "Find a hidden treasure", "Book an excursion") with conditions in `eligibleQuest`.
-- Remember: bump versions, test the *sheet/menu/state* logic synchronously via `_dbg`, deploy, then **pause** (owner wants a playable checkpoint after each wave).
+Vacation internals (Wave 5), for reference: `VACATIONS` data; `buildVacation()` generates terrain by
+`theme` and carves walkable tiles under furniture/spawn; `scene.type==='vacation'` is handled in
+`gotoScene`/`rebuildAll`/`drawTerrain`(`drawVacTile`)/`drawFurn`; `flyTo`/`flyHome`/`collectTreasure`/`doExcursion`;
+trip state in `S.vacay = {id, found[], excursions[]}` (null when home). Debug: `Game._dbg().fly('beach')`,
+`.forceScene('vacation')` (use forceScene because preview rAF freezes the scene transition).
 
 ## 8. Owner preferences (important)
 - **Dopamine-first, low-stress, fun — not a chore.** Avoid harsh fail states; "welcome-back" refills needs on login; collapses send you to hospital rather than game-over.
