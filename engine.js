@@ -2049,7 +2049,7 @@ function renderTree(){
       const you=n.tid===S.tid;
       const par=(n.parents&&n.parents.length)
         ? 'child of '+n.parents.map(pid=>(treeNode(pid)||{}).name||'—').join(' & ')
-        : (g===1 ? (you?'the founder':'married into the family') : '');
+        : (n.tid==='t0' ? 'the founder' : (g===1 ? 'married into the family' : ''));
       body+=`<div class="relrow"${!n.alive?' style="opacity:.5"':''}>`
         +`<div class="ravatar" style="display:flex;align-items:center;justify-content:center;font-size:18px">${n.alive?(you?'⭐':'🙂'):'🕯️'}</div>`
         +`<div class="rinfo"><b>${n.name}${you?' <span class="tag">YOU</span>':''}${!n.alive?' <span class="meta">· passed</span>':''}</b>`
@@ -2215,6 +2215,15 @@ function normalize(s){
   }
   for(const k of (s.kids||[])){ if(typeof k.age!=='number') k.age = k.ageDays>=8?14:k.ageDays>=3?7:1; }
   for(const k of (s.kids||[])){ if(typeof k.grade!=='number') k.grade=0; k.atSchool=k.atSchool||null; if(typeof k.eduT!=='number') k.eduT=0; }
+  // back-fill an existing family (spouse + kids) from saves that predate the tree, so they appear in it
+  (()=>{ const fgen=s.generation||1; let nx=s._tnext||1;
+    const seed=(name,gen,par)=>{ const tid='t'+(nx=nx+1); s.tree.push({tid, name, gen, parents:par, alive:true}); return tid; };
+    const partner=(s.members||[]).find(m=>m.role==='Partner');
+    if(partner && !partner.tid) partner.tid=seed(partner.name, fgen, []);
+    const par=['t0'].concat(partner&&partner.tid?[partner.tid]:[]);
+    (s.members||[]).forEach(m=>{ if(m.role!=='Partner' && !m.tid) m.tid=seed(m.name, fgen+1, par.slice()); });
+    (s.kids||[]).forEach(k=>{ if(!k.tid) k.tid=seed(k.name, fgen+1, par.slice()); });
+    s._tnext=nx; })();
   if(!s.quests.length) { S=s; seedQuests(); }
   return s;
 }
