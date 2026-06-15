@@ -29,7 +29,7 @@ cd ~/Developer/PocketLife
 git add -A && git commit -m "…" && git push        # GitHub Pages auto-rebuilds ~1-2 min
 ```
 Verify live: `curl -s https://artlikeus.github.io/pocket-life/index.html | grep 'v=N'`.
-Current versions: **assets `?v=17`, sw `pocket-life-v13`** (next edit → v=18 / v14).
+Current versions: **assets `?v=20`, sw `pocket-life-v16`** (next edit → v=21 / v17).
 
 ## 4. CRITICAL gotchas (these bit us repeatedly)
 - **Cache-busting is mandatory.** The browser memory-caches JS even after SW unregister.
@@ -66,6 +66,17 @@ Current versions: **assets `?v=17`, sw `pocket-life-v13`** (next edit → v=18 /
 All five waves the owner asked for are built, tested, and live. There is **no Wave 6 planned** —
 future work is polish/balance/new content, not a scheduled wave. If the owner asks for more,
 treat it as a fresh feature request.
+
+**Wave 5 refinements (shipped, v=20 / sw v16):** (1) confirmed everyone ages at the same pace
+(`AGE_PER_DAY`); (2) **🌳 Family Tree** tab in 👪 Life — lineage in `S.tree`
+(`{tid,name,gen,parents,alive}`), `S.tid` = node you're playing; `treeAdd/treeNode/treeKill`;
+wired into freshState/normalize (seeds founder + **back-fills pre-tree spouses/kids so old saves
+aren't empty**), propose/tryBaby/grown-kid/switchTo/rebirth/checkDeaths; (3) **name your baby**
+via `prompt()` in `tryBaby` (note: `prompt()` throws in the headless Claude_Preview but works on
+real devices, same as the transfer-code prompt — stub `window.prompt` to test in preview);
+(4) **vacations priced as flight + rental** with a +30%/minor-kid surcharge (`vacationCost`),
+a tappable **rental cabin** (`OBJTYPES.rental`, Sleep/Freshen/Relax), and the **family rendered on
+the vacation map** (`buildHomies` vacation branch).
 
 Vacation internals (Wave 5), for reference: `VACATIONS` data; `buildVacation()` generates terrain by
 `theme` and carves walkable tiles under furniture/spawn; `scene.type==='vacation'` is handled in
