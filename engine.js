@@ -149,7 +149,24 @@ function buildTown(){
 let homies=[];
 function buildHomies(){
   homies=[];
-  if(!scene||scene.type!=='home') return;
+  if(!scene) return;
+  if(scene.type==='vacation'){
+    // the family came along — spouse + minor kids, near the rental
+    const rental=[...scene.furnAt.values()].find(f=>f.t==='rental');
+    const bx=rental?rental.c:Math.floor(scene.cols/2)-1, by=rental?rental.r+1:Math.floor(scene.rows/2);
+    const z={x:Math.max(1,bx-1),y:Math.min(scene.rows-2,by),w:4,h:2};
+    (S.members||[]).filter(m=>m.role==='Partner').forEach(m=>{
+      homies.push({kind:'partner', mid:m.mid, name:m.name,
+        look:{skin:m.skin,shirt:m.shirt,hair:m.hair,style:m.hairStyle,dress:isDressOutfit(m.outfit),lashes:m.gender==='f'},
+        px:(z.x+.5)*T, py:(z.y+.5)*T, zone:z, dir:'S', wt:0, cool:1+Math.random()*3, tpath:[], sc:1});
+    });
+    (S.kids||[]).forEach((k,i)=>{ if((k.age||0)<CHILD_AGE) return;
+      homies.push({kind:'kid', idx:i, name:k.name, look:{skin:S.skin,shirt:k.shirt||'#ffd93d',hair:S.hair,style:0},
+        px:(z.x+1+(i%2)+.5)*T, py:(z.y+1+.5)*T, zone:z, dir:'S', wt:0, cool:1+Math.random()*2, tpath:[], sc:k.age>=TEEN_AGE?0.85:0.7});
+    });
+    return;
+  }
+  if(scene.type!=='home') return;
   const def=homeDef(), pz=def.partnerZone, kz=def.kidZone;
   // inactive household members (spouse + grown kids you're not currently controlling)
   (S.members||[]).forEach((m,i)=>{ const partner=m.role==='Partner'; const z=partner?pz:kz;
@@ -164,7 +181,7 @@ function buildHomies(){
   });
 }
 function tickHomies(dt){
-  if(!scene||scene.type!=='home') return;
+  if(!scene||(scene.type!=='home'&&scene.type!=='vacation')) return;
   for(const n of homies){
     if(n.tpath.length){ let dist=T*1.1*dt;
       while(dist>0&&n.tpath.length){ const t2=n.tpath[0]; const dx=t2.x-n.px,dy=t2.y-n.py,d=Math.hypot(dx,dy);
@@ -203,10 +220,11 @@ function buildVacation(){
   for(let dx=-1;dx<=1;dx++) for(let dy=-1;dy<=1;dy++) carve(v.spawn[0]+dx,v.spawn[1]+dy);
   const solid=new Set(), furnAt=new Map(), doors=new Map();
   for(let r=0;r<H;r++) for(let c=0;c<W;c++){ const ch=map[r][c]; if(ch==='T'||ch==='w') solid.add(c+','+r); }
-  const SOLIDV=['palm','cabana','tiki','ruins'];
+  const SOLIDV=['palm','cabana','tiki','ruins','rental'];
   for(const f of v.furn){ const meta=OBJTYPES[f.t]; const obj={...f,meta};
     for(const [dx,dy] of meta.fp){ const k=(f.c+dx)+','+(f.r+dy); if(SOLIDV.indexOf(f.t)>=0) solid.add(k); furnAt.set(k,obj); } }
   scene={type:'vacation', map, cols:W, rows:H, solid, furnAt, doors, theme:v.theme, vac:v};
+  buildHomies();
 }
 
 /* ============================================================ */
@@ -617,6 +635,13 @@ function drawFurn(t,x,y,o){
     case 'return': {
       ctx.fillStyle='#8a8475'; ctx.fillRect(x+T/2-2,y+10,4,T-12); box(x+4,y+4,T-8,12,3,'#5b8fd6');
       ctx.font='11px sans-serif'; ctx.textAlign='center'; ctx.fillStyle='#fff'; ctx.fillText('✈️',x+T/2,y+14); ctx.textAlign='left'; break; }
+    case 'rental': {
+      box(x+3,y+T*0.5,2*T-6,T*0.5-2,4,'#e3c79a');                       // walls
+      ctx.fillStyle='#b3654a'; ctx.beginPath(); ctx.moveTo(x,y+T*0.55); ctx.lineTo(x+T,y+8); ctx.lineTo(x+2*T,y+T*0.55); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle=COL.outline; ctx.lineWidth=1.5; ctx.stroke();
+      box(x+T-6,y+T*0.62,12,T*0.36,2,'#6b4426');                        // door
+      ctx.fillStyle='#9fd8ff'; ctx.fillRect(x+8,y+T*0.62,9,9); ctx.fillRect(x+2*T-20,y+T*0.62,9,9); // windows
+      rr(x+2*T-20,y+T*0.4,18,12,4,'rgba(255,255,255,.9)'); ctx.font='9px sans-serif'; ctx.textAlign='center'; ctx.fillStyle='#3b3347'; ctx.fillText('🏚️',x+2*T-11,y+T*0.4+10); ctx.textAlign='left'; break; }
     default: box(x+5,y+5,T-10,T-10,4,'#8a7a9a');
   }
 }
@@ -697,7 +722,7 @@ function drawActors(){
     }
   }
   // household (partner & kids) at home
-  if(scene.type==='home'){
+  if(scene.type==='home'||scene.type==='vacation'){
     for(const n of homies){
       if(action&&action.woo&&n.kind==='partner') continue;   // they're… busy
       const x=n.px-cam.x, y=n.py-cam.y;
@@ -941,19 +966,21 @@ function ageEveryone(days){
     if(k.age>=ADULT_AGE) grown.push(k);
   }
   for(const k of grown){ S.kids=S.kids.filter(x=>x!==k);
-    S.members.push(makeMember({name:k.name,skin:S.skin,shirt:k.shirt||'#7fc1e0',hair:S.hair,style:0,gender:k.gender||'nb'},'Child',k.age));
+    const mem=makeMember({name:k.name,skin:S.skin,shirt:k.shirt||'#7fc1e0',hair:S.hair,style:0,gender:k.gender||'nb'},'Child',k.age);
+    mem.tid=k.tid; S.members.push(mem);
     toast('🎓 '+k.name+' grew up! Live as them anytime — 👪 Life › Family.'); SFX.good();
   }
-  if(scene&&scene.type==='home') buildHomies();
+  if(scene&&(scene.type==='home'||scene.type==='vacation')) buildHomies();
   checkDeaths();
 }
 function checkDeaths(){
   for(const m of (S.members||[]).slice()){
     if(m.age>=m.lifespan || (m.age>=70 && Math.random()<0.04)){
       S.members=S.members.filter(x=>x!==m);
+      if(m.tid) treeKill(m.tid);
       if(m.role==='Partner') S.partner=null;
       toast('🕯️ '+m.name+' passed away at '+Math.floor(m.age)+'. Rest well.');
-      if(scene&&scene.type==='home') buildHomies();
+      if(scene&&(scene.type==='home'||scene.type==='vacation')) buildHomies();
     }
   }
   if(!S._ending && (S.age>=S.lifespan || (S.age>=70 && Math.random()<0.045))){ S._ending=true; setTimeout(endOfLife,400); }
@@ -980,11 +1007,12 @@ function endOfLife(){
 function rebirth(mid){
   const idx=(S.members||[]).findIndex(m=>m.mid===mid); if(idx<0){ passOn(); return; }
   const heir=S.members[idx];
+  treeKill(S.tid);   // the sim you were playing has passed
   for(const f of PERSONAL){ if(heir[f]!==undefined) S[f]=heir[f]; }
-  S.mid=heir.mid; S.role='You'; S.members.splice(idx,1);
+  S.mid=heir.mid; S.role='You'; if(heir.tid) S.tid=heir.tid; S.members.splice(idx,1);
   S.generation=(S.generation||1)+1; S._ending=false;
   S.coins=(S.coins||0)+800;   // a modest inheritance
-  buildNeedsUI(); if(scene&&scene.type==='home') buildHomies();
+  buildNeedsUI(); if(scene&&(scene.type==='home'||scene.type==='vacation')) buildHomies();
   el('levelOverlay').classList.remove('show'); paused=false; updateHUDNow(); save();
   SFX.level(); burst(vw/2,vh/3,'confetti');
   toast('🌱 The '+S.surname+' line lives on — you now play as '+S.name+', generation '+S.generation+'.');
@@ -1192,6 +1220,10 @@ function showObjectSheet(o,key){
   else if(t==='excursion'){ const ex=(scene.vac.excursions||[]).find(e=>e.id===o.ex)||{};
     add(ex.icon||'🎟️','Book: '+(ex.name||'Excursion'), (ex.price||0)+'💰 · +'+(ex.fun||0)+' fun'+(ex.energy?' '+(ex.energy>0?'+':'')+ex.energy+' energy':''),'x',()=>doExcursion(o,key)); }
   else if(t==='return'){ add('✈️','Fly home','Head back, rested & happy','x',()=>{ closeSheet(); flyHome(); }); }
+  else if(t==='rental'){
+    add('😴','Sleep here','Full energy at your rental','s',()=>sleep(o,key,true));
+    add('🚿','Freshen up','+hygiene','f',()=>doAct(o,key,'🚿','Freshening up',{hygiene:80},20));
+    add('🛋️','Relax inside','+fun +energy','r',()=>doAct(o,key,'🛋️','Relaxing',{fun:20,energy:12},22)); }
   else if(t==='lounger'||t==='cabana'){ add('🌞','Soak up the sun','+fun +energy, pure bliss','x',()=>doAct(o,key,'😎','Lounging',{fun:24,energy:14},25)); }
   else if(t==='tiki'){ add('🍹','Order a drink','12💰 · +fun +social','x',()=>{ if(!spend(12)) return; doAct(o,key,'🍹','Sipping a cocktail',{fun:22,social:12},18); }); }
   else if(t==='campfire'){ add('🔥','Warm up by the fire','+fun +social','x',()=>doAct(o,key,'🔥','By the campfire',{fun:20,social:16},20)); }
@@ -1394,7 +1426,8 @@ function propose(id){
   if(!(S.gifts&&S.gifts.ring>0)){ toast('You need a 💍 ring (Mall)'); SFX.err(); return; }
   S.gifts.ring--; S.partner=id; S.rels[id].rel=Math.max(S.rels[id].rel,80); S.rels[id].romance=true;
   npcSprites=npcSprites.filter(sp=>sp.def.id!==id);   // they move in with you
-  const pn=npcDef(id); if(!(S.members||[]).some(m=>m.role==='Partner')){ S.members.push(makeMember(pn,'Partner',S.age)); }
+  const pn=npcDef(id); if(!(S.members||[]).some(m=>m.role==='Partner')){ const mem=makeMember(pn,'Partner',S.age);
+    mem.tid=treeAdd(pn.name, (treeNode(S.tid)||{}).gen||S.generation||1, []); S.members.push(mem); }
   buildHomies();
   burst(S.px-cam.x,S.py-cam.y-30,'confetti'); SFX.level(); qprogress('partner');
   addXP(60); toast('💍 '+pn.name+' said YES! They moved in 🏡💞'); closeSheet(); refreshLifeDot(); save();
@@ -1403,11 +1436,16 @@ function tryBaby(id){
   if(S.kids.length>=4){ toast('Your home is full!'); return; }
   if(S.homeTier<1){ toast('You need a bigger home for a baby — visit 🛍️ the Mall! 🏡'); SFX.err(); closeSheet(); return; }
   if(S.kids.some(k=>(k.age||0)<CHILD_AGE)){ toast('The crib is already busy 👶'); SFX.err(); return; }
-  const name=KIDNAMES[Math.floor(Math.random()*KIDNAMES.length)];
-  S.kids.push({name, age:0, happy:60, grade:0, gender:Math.random()<0.5?'f':'m', shirt:SHIRTS[Math.floor(Math.random()*SHIRTS.length)]});
+  const def=KIDNAMES[Math.floor(Math.random()*KIDNAMES.length)];
+  let name=(typeof prompt==='function') ? prompt('Name your baby:', def) : def;
+  name=(name||def).trim().slice(0,12)||def;
+  const spouse=(S.members||[]).find(m=>m.role==='Partner');
+  const myGen=(treeNode(S.tid)||{}).gen||S.generation||1;
+  const tid=treeAdd(name, myGen+1, [S.tid].concat(spouse&&spouse.tid?[spouse.tid]:[]));
+  S.kids.push({name, tid, age:0, happy:60, grade:0, gender:Math.random()<0.5?'f':'m', shirt:SHIRTS[Math.floor(Math.random()*SHIRTS.length)]});
   buildHomies();
   burst(S.px-cam.x,S.py-cam.y-30,'confetti'); SFX.level();
-  addXP(50); toast('👶 Welcome baby '+name+'! Find them at home 🏠'); closeSheet(); refreshLifeDot(); save();
+  addXP(50); toast('👶 Welcome, '+name+'! Find them at home 🏠'); closeSheet(); refreshLifeDot(); save();
 }
 function breakup(id){ if(!confirm('Break up with '+npcDef(id).name+'?')) return;
   S.partner=null; S.members=(S.members||[]).filter(m=>m.role!=='Partner'); buildHomies();
@@ -1522,21 +1560,29 @@ function showDiner(){
   openSheet(body); bindSheet();
 }
 /* ----- vacations ----- */
+function vacationCost(v){
+  const minor=(S.kids||[]).filter(k=>(k.age||0)<ADULT_AGE).length;
+  const mult=1+VACATION_KID_SURCHARGE*minor;
+  const flight=Math.round(v.flight*mult), rental=Math.round(v.rental*mult);
+  return { minor, mult, flight, rental, total:flight+rental };
+}
 function showTravelAgency(){
   sheetActions={};
-  let body=sheetHead('✈️','Travel Agency','Book a getaway — explore, find hidden treasures & come home rested.');
-  VACATIONS.forEach(v=>{ const idk='v_'+v.id;
-    body+=item(v.icon,v.name,v.desc+' · '+v.furn.filter(f=>f.t==='treasure').length+' treasures · '+v.excursions.length+' excursions',{txt:v.price+'💰'},`data-a="${idk}"`);
+  const minor=(S.kids||[]).filter(k=>(k.age||0)<ADULT_AGE).length;
+  let body=sheetHead('✈️','Travel Agency','Flights + a rental are included for the whole family. Each child adds '+(VACATION_KID_SURCHARGE*100)+'% until they grow up.'+(minor?' ('+minor+' kid'+(minor>1?'s':'')+' coming along)':''));
+  VACATIONS.forEach(v=>{ const c=vacationCost(v); const idk='v_'+v.id;
+    body+=item(v.icon,v.name,'✈️ '+c.flight+' + 🏚️ '+c.rental+(c.minor?' · family ×'+c.mult.toFixed(2):'')+' · '+v.excursions.length+' excursions',{txt:c.total+'💰'},`data-a="${idk}"`);
     sheetActions[idk]=()=>flyTo(v);
   });
   body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
   openSheet(body); bindSheet();
 }
 function flyTo(v){
-  if(!spend(v.price)) return;
+  const c=vacationCost(v);
+  if(!spend(c.total)) return;
   S.vacay={id:v.id, found:[], excursions:[]};
   closeSheet(); qprogress('vacation'); addXP(20); SFX.level();
-  toast('✈️ Off to '+v.name+'! '+v.icon);
+  toast('✈️ Off to '+v.name+(c.minor?' with the kids':'')+'! '+v.icon);
   gotoScene('vacation', v.spawn);
 }
 function flyHome(){
@@ -1965,12 +2011,13 @@ function openQuests(){ closeSheet(); lifeTab='quests'; renderLife(); }
 function lifeTabBar(){
   const dot=S.quests.some(q=>q.done&&!q.claimed)?' •':'';
   return `<div class="sheetTabs">`+
-    [['quests','📋 Quests'+dot],['people','👪 People'],['save','💾 Save']].map(([k,l])=>
+    [['quests','📋 Quests'+dot],['people','👪 People'],['tree','🌳 Tree'],['save','💾 Save']].map(([k,l])=>
       `<button class="pill ${lifeTab===k?'sel':''}" data-g="lt_${k}">${l}</button>`).join('')+`</div>`;
 }
 function renderLife(){
   genActions={};
   if(lifeTab==='people'){ renderPeople(); return; }
+  if(lifeTab==='tree'){ renderTree(); return; }
   if(lifeTab==='save'){ renderSave(); return; }
   // quests (default)
   let body=`<h2>📋 Quests</h2><div class="sub">Little goals, big rewards. New ones appear as you play.</div>`;
@@ -1988,7 +2035,31 @@ function renderLife(){
   wireLifeTabs(); genActions.close=closeModal;
   openModal(body);
 }
-function wireLifeTabs(){ genActions.lt_quests=()=>{lifeTab='quests';renderLife();}; genActions.lt_people=()=>{lifeTab='people';renderLife();}; genActions.lt_save=()=>{lifeTab='save';renderLife();}; }
+function wireLifeTabs(){ genActions.lt_quests=()=>{lifeTab='quests';renderLife();}; genActions.lt_people=()=>{lifeTab='people';renderLife();}; genActions.lt_tree=()=>{lifeTab='tree';renderLife();}; genActions.lt_save=()=>{lifeTab='save';renderLife();}; }
+function renderTree(){
+  genActions={};
+  const tree=S.tree||[];
+  let body=`<h2>🌳 Family Tree</h2><div class="sub">The ${S.surname||''} lineage — ${tree.length} ${tree.length===1?'person':'people'}, ${(S.generation||1)} generation${(S.generation||1)>1?'s':''}</div>`;
+  body+=lifeTabBar();
+  const gens=[...new Set(tree.map(n=>n.gen))].sort((a,b)=>a-b);
+  if(!gens.length){ body+=`<p style="color:#bdb6d6;font-size:12.5px;margin-top:10px">Your story begins here. Marry and have children to grow the tree.</p>`; }
+  gens.forEach(g=>{
+    body+=`<label>Generation ${g}</label>`;
+    tree.filter(n=>n.gen===g).forEach(n=>{
+      const you=n.tid===S.tid;
+      const par=(n.parents&&n.parents.length)
+        ? 'child of '+n.parents.map(pid=>(treeNode(pid)||{}).name||'—').join(' & ')
+        : (g===1 ? (you?'the founder':'married into the family') : '');
+      body+=`<div class="relrow"${!n.alive?' style="opacity:.5"':''}>`
+        +`<div class="ravatar" style="display:flex;align-items:center;justify-content:center;font-size:18px">${n.alive?(you?'⭐':'🙂'):'🕯️'}</div>`
+        +`<div class="rinfo"><b>${n.name}${you?' <span class="tag">YOU</span>':''}${!n.alive?' <span class="meta">· passed</span>':''}</b>`
+        +`<span class="meta">${par}</span></div></div>`;
+    });
+  });
+  body+=`<button class="closebtn" data-g="close">Close</button>`;
+  wireLifeTabs(); genActions.close=closeModal;
+  openModal(body);
+}
 function claimQuest(i){
   const q=S.quests[i]; const def=QUEST_POOL.find(d=>d.id===q.id); if(!q.done||q.claimed) return;
   q.claimed=true; addCoins(def.coin); SFX.coin(); burst(vw/2,vh/2,'confetti'); addXP(def.xp);
@@ -2100,6 +2171,7 @@ function freshState(opts){
     present:NPCS.map(n=>n.id), movedAway:{}, lastDay:1,
     age:START_AGE, lifespan:Math.round(LIFE_MIN+Math.random()*(LIFE_MAX-LIFE_MIN)),
     members:[], mid:'founder', role:'You', surname:FAMILY_SURNAMES[Math.floor(Math.random()*FAMILY_SURNAMES.length)], generation:1,
+    tree:[{tid:'t0', name:opts.name, gen:1, parents:[], alive:true}], tid:'t0', _tnext:1,
     vacay:null,
     vehicles:[], vehicle:null, gifts:{},
     rels:{}, partner:null, kids:[], quests:[], stats:{}, warned:{} };
@@ -2135,6 +2207,8 @@ function normalize(s){
   if(typeof s.generation!=='number') s.generation=1;
   s.stats=s.stats||{}; if(typeof s.stats.peakCoins!=='number') s.stats.peakCoins=Math.floor(s.coins||0);
   if(s.vacay===undefined) s.vacay=null;
+  if(!s.tree||!s.tree.length){ s.tree=[{tid:'t0', name:s.name, gen:s.generation||1, parents:[], alive:true}]; s.tid='t0'; s._tnext=1; }
+  if(!s.tid) s.tid='t0'; if(typeof s._tnext!=='number') s._tnext=s.tree.length;
   // migrate an existing spouse (NPC partner) into a controllable member
   if(s.partner && !s.members.some(m=>m.role==='Partner')){
     const pn=(NPCS.find(n=>n.id===s.partner)); if(pn) s.members.push(makeMember(pn,'Partner',s.age));
@@ -2161,17 +2235,20 @@ function makeMember(look, role, age){
     needs:{hunger:80,energy:85,hygiene:80,bladder:78,fun:72,social:70},
     career:null, jobLvl:1, promoStreak:0, business:null, degree:false, eduCredits:0, level:1, xp:0, milestones:[] };
 }
+function treeAdd(name, gen, parents){ const tid='t'+(S._tnext=(S._tnext||1)+1); S.tree=S.tree||[]; S.tree.push({tid, name, gen, parents:parents||[], alive:true}); return tid; }
+function treeNode(tid){ return (S.tree||[]).find(n=>n.tid===tid); }
+function treeKill(tid){ const n=treeNode(tid); if(n) n.alive=false; }
 function stageOf(age){ let s=LIFE_STAGES[0]; for(const st of LIFE_STAGES){ if(age>=st[0]) s=st; } return s; }
 function ageLabel(age){ const s=stageOf(age); return Math.floor(age)+'y · '+s[2]+' '+s[1]; }
 function switchTo(mid){
   const idx=(S.members||[]).findIndex(m=>m.mid===mid); if(idx<0) return;
   const target=S.members[idx];
   if(target.age<TEEN_AGE){ toast(target.name+' is too young to control'); SFX.err(); return; }
-  const cur={}; for(const f of PERSONAL) cur[f]=S[f]; cur.mid=S.mid; cur.role=S.role;
+  const cur={}; for(const f of PERSONAL) cur[f]=S[f]; cur.mid=S.mid; cur.role=S.role; cur.tid=S.tid;
   for(const f of PERSONAL){ if(target[f]!==undefined) S[f]=target[f]; }
-  S.mid=target.mid; S.role=target.role;
+  S.mid=target.mid; S.role=target.role; if(target.tid) S.tid=target.tid;
   S.members[idx]=cur;
-  buildNeedsUI(); if(scene&&scene.type==='home') buildHomies();
+  buildNeedsUI(); if(scene&&(scene.type==='home'||scene.type==='vacation')) buildHomies();
   closeModal(); updateHUDNow(); save();
   SFX.good(); burst(vw/2,vh/3,'spark'); toast('🔄 Now living as '+S.name+' ('+ageLabel(S.age)+')');
 }

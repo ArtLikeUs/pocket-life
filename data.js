@@ -344,43 +344,46 @@ const OBJTYPES = {
   treasure:  { name:'Hidden Treasure', icon:'❓', desc:'Something glints here…', fp:[[0,0]] },
   excursion: { name:'Excursion',   icon:'🎟️', desc:'Book an adventure!', fp:[[0,0]] },
   return:    { name:'Departures',  icon:'✈️', desc:'Head back home.', fp:[[0,0]] },
+  rental:    { name:'Your Rental', icon:'🏚️', desc:'Your home away from home — rest up here.', fp:[[0,0],[1,0]] },
 };
 
 /* ---------------- vacations (Wave 5) ----------------
    Book a trip → travel to a themed, explorable map. Tap hidden treasures and
    do excursions; fly home rested. Terrain is generated per `theme` in engine. */
+/* flight + rental are MANDATORY & prepaid; total = (flight+rental) × (1 + 0.30·minorKids) */
+const VACATION_KID_SURCHARGE = 0.30;
 const VACATIONS = [
-  { id:'beach', name:'Sunny Beach', icon:'🏖️', price:600, theme:'beach', cols:15, rows:15, days:2,
+  { id:'beach', name:'Sunny Beach', icon:'🏖️', flight:320, rental:260, theme:'beach', cols:15, rows:15, days:2,
     desc:'Sun, sand & salty air', spawn:[7,12],
     excursions:[ {id:'snorkel', icon:'🤿', name:'Go Snorkeling', price:120, fun:42, social:12},
                  {id:'jetski',  icon:'🌊', name:'Rent a Jet Ski', price:160, fun:50, energy:-8} ],
-    furn:[ {t:'palm',c:2,r:5},{t:'palm',c:12,r:6},{t:'palm',c:4,r:9},{t:'cabana',c:9,r:10},{t:'lounger',c:6,r:10},
+    furn:[ {t:'rental',c:10,r:3},{t:'palm',c:2,r:5},{t:'palm',c:12,r:6},{t:'palm',c:4,r:9},{t:'cabana',c:9,r:10},{t:'lounger',c:6,r:10},
       {t:'excursion',c:4,r:4,ex:'snorkel'},{t:'excursion',c:11,r:9,ex:'jetski'},
       {t:'treasure',c:13,r:4},{t:'treasure',c:2,r:11},{t:'treasure',c:8,r:6},
       {t:'return',c:7,r:13} ] },
-  { id:'jungle', name:'Jungle Trek', icon:'🌴', price:900, theme:'jungle', cols:16, rows:16, days:3,
+  { id:'jungle', name:'Jungle Trek', icon:'🌴', flight:460, rental:400, theme:'jungle', cols:16, rows:16, days:3,
     desc:'Wild green & ancient ruins', spawn:[8,13],
     excursions:[ {id:'zipline', icon:'🪢', name:'Zipline Tour', price:180, fun:52, energy:-10},
                  {id:'safari',  icon:'🐘', name:'Wildlife Safari', price:200, fun:46, social:14} ],
-    furn:[ {t:'ruins',c:7,r:4},{t:'campfire',c:8,r:10},{t:'palm',c:2,r:7},{t:'palm',c:13,r:8},
-      {t:'excursion',c:3,r:4,ex:'zipline'},{t:'excursion',c:12,r:11,ex:'safari'},
+    furn:[ {t:'rental',c:2,r:4},{t:'ruins',c:7,r:4},{t:'campfire',c:8,r:10},{t:'palm',c:13,r:8},
+      {t:'excursion',c:3,r:8,ex:'zipline'},{t:'excursion',c:12,r:11,ex:'safari'},
       {t:'treasure',c:5,r:3},{t:'treasure',c:13,r:4},{t:'treasure',c:2,r:12},{t:'treasure',c:10,r:7},
       {t:'return',c:8,r:14} ] },
-  { id:'resort', name:'Luxury Resort', icon:'🏝️', price:1500, theme:'resort', cols:16, rows:15, days:3,
+  { id:'resort', name:'Luxury Resort', icon:'🏝️', flight:720, rental:760, theme:'resort', cols:16, rows:15, days:3,
     desc:'Poolside pampering, all-inclusive', spawn:[8,12],
     excursions:[ {id:'spa',   icon:'💆', name:'Spa Day', price:220, fun:40, energy:30},
                  {id:'sail',  icon:'⛵', name:'Sunset Sail', price:260, fun:54, social:18} ],
-    furn:[ {t:'tiki',c:12,r:4},{t:'lounger',c:4,r:10},{t:'lounger',c:6,r:10},{t:'cabana',c:11,r:10},{t:'palm',c:2,r:5},
-      {t:'excursion',c:3,r:4,ex:'spa'},{t:'excursion',c:13,r:11,ex:'sail'},
+    furn:[ {t:'rental',c:3,r:11},{t:'tiki',c:12,r:4},{t:'lounger',c:6,r:10},{t:'cabana',c:11,r:10},{t:'palm',c:2,r:4},
+      {t:'excursion',c:3,r:3,ex:'spa'},{t:'excursion',c:13,r:11,ex:'sail'},
       {t:'treasure',c:14,r:3},{t:'treasure',c:2,r:12},{t:'treasure',c:8,r:5},
       {t:'return',c:8,r:13} ] },
-  { id:'mountain', name:'Mountain Lodge', icon:'🏔️', price:1100, theme:'mountain', cols:16, rows:16, days:3,
+  { id:'mountain', name:'Mountain Lodge', icon:'🏔️', flight:540, rental:520, theme:'mountain', cols:16, rows:16, days:3,
     desc:'Crisp air & cozy fires', spawn:[8,13],
     excursions:[ {id:'ski',   icon:'🎿', name:'Hit the Slopes', price:190, fun:50, energy:-12},
                  {id:'hot',   icon:'♨️', name:'Hot Springs', price:170, fun:38, energy:26} ],
-    furn:[ {t:'cabana',c:8,r:10},{t:'campfire',c:6,r:11},{t:'palm',c:2,r:6},{t:'palm',c:13,r:7},
-      {t:'excursion',c:3,r:5,ex:'ski'},{t:'excursion',c:12,r:11,ex:'hot'},
-      {t:'treasure',c:5,r:3},{t:'treasure',c:13,r:4},{t:'treasure',c:3,r:12},{t:'treasure',c:11,r:6},
+    furn:[ {t:'rental',c:12,r:13},{t:'cabana',c:8,r:10},{t:'campfire',c:6,r:11},{t:'palm',c:2,r:6},{t:'palm',c:13,r:7},
+      {t:'excursion',c:3,r:5,ex:'ski'},{t:'excursion',c:12,r:8,ex:'hot'},
+      {t:'treasure',c:5,r:3},{t:'treasure',c:13,r:4},{t:'treasure',c:3,r:12},{t:'treasure',c:11,r:5},
       {t:'return',c:8,r:14} ] },
 ];
 const TREASURE_LOOT = [   // a hidden treasure gives one of these
