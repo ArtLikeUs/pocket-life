@@ -13,6 +13,12 @@ owner's iPhone. Built in waves. **It is live and shareable:**
 - **Repo (public):** https://github.com/ArtLikeUs/pocket-life  (owner GitHub: `ArtLikeUs`, `gh` is authed)
 - **Local path:** `~/Developer/PocketLife`
 
+> **Claude Code skill:** a personal skill named **`pocket-life`** (at `~/.claude/skills/pocket-life/`,
+> not in this repo) captures the dev/test/deploy workflow — the Claude-Preview testing methodology,
+> the verify-the-whole-effect discipline, and the deploy-and-poll loop. It auto-loads when you ask
+> Claude to work on Pocket Life. This `HANDOFF.md` stays the source of truth for facts (file map,
+> architecture, gotchas); the skill adds *how to test and verify*.
+
 ## 2. Files (the whole game)
 - `index.html` — shell + profile/login + creator UI + button wiring. **Bump `?v=N` on the 3 asset tags every edit.**
 - `data.js` — all data/config (town map generator, buildings, NPCs, foods, careers, businesses, college, school, town activities, stimulants, aging constants, legacy flavor, quests, furniture defs).
