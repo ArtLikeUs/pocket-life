@@ -1,4 +1,4 @@
-const CACHE = 'pocket-life-v16';
+const CACHE = 'pocket-life-v17';
 const ASSETS = ['./', './index.html', './style.css', './data.js', './engine.js', './manifest.webmanifest', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

@@ -11,7 +11,7 @@
 <meta name="description" content="Pocket Life — a tiny life sim for your pocket.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
-<link rel="stylesheet" href="style.css?v=20">
+<link rel="stylesheet" href="style.css?v=21">
 <title>Pocket Life</title>
 </head>
 <body>
@@ -21,6 +21,7 @@
     <div id="clock"><b>Day 1</b><br>08:00</div>
     <div id="rightTop">
       <div id="coins">💰 500</div>
+      <button id="helpBtn" title="How to play">❓</button>
       <button id="pauseBtn">⏸</button>
       <button id="speedBtn">▶︎ 1×</button>
     </div>
@@ -90,8 +91,8 @@
   </div>
 </div>
 
-<script src="data.js?v=20"></script>
-<script src="engine.js?v=20"></script>
+<script src="data.js?v=21"></script>
+<script src="engine.js?v=21"></script>
 <script>
   // wire UI buttons to engine
   document.getElementById('outBtn').addEventListener('click', () => Game.toggleOut());
@@ -100,6 +101,7 @@
   document.getElementById('lifeBtn').addEventListener('click', () => Game.openFamily());
   document.getElementById('speedBtn').addEventListener('click', () => Game.toggleSpeed());
   document.getElementById('pauseBtn').addEventListener('click', () => Game.togglePause());
+  document.getElementById('helpBtn').addEventListener('click', () => Game.openHelp());
   document.getElementById('pauseOverlay').addEventListener('click', () => Game.togglePause());
   document.getElementById('newLifeBtn').addEventListener('click', () => Game.showCreate());
   document.getElementById('loadCodeLink').addEventListener('click', () => {

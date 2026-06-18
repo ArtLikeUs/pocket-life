@@ -19,16 +19,19 @@ let S = null;                       // saved game state
 let profileId = null;
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
-let scale = 1, vw = VIEW_COLS*T, vh = VIEW_ROWS*T;
+const BASE_VW = VIEW_COLS*T, BASE_VH = VIEW_ROWS*T;   // design viewport (world px) at zoom 1
+let zoom = 1; const Z_MIN = 0.55, Z_MAX = 1.6;        // <1 sees more of the map, >1 zooms in
+let scale = 1, vw = BASE_VW, vh = BASE_VH;
 
 let scene = null;                   // {type, map, cols, rows, solid:Set, furnAt:Map, doors:Map}
-let cam = {x:0, y:0};
+let cam = {x:0, y:0}, camFree = false;   // camFree: player dragged the camera; stops auto-follow until they move
 let path = [], pending = null, action = null, facing='S', walkT=0;
 let npcSprites = [];                // town npc runtime
 let parts = [];                     // particles
 let speed = 1, paused = false, userPaused = false, transition = 0, transitionTo = null;
-let pendingMove = null;   // tap a tile to aim, tap that same tile again to go (no timing window)
+let pendingMove = null;   // double-tap a tile to walk there
 let lastFootEvt = 0;
+let babyGiggle = 0;       // timestamp of the last baby interaction → crib shows a happy reaction
 
 /* ---------------- audio (tiny synth, no assets) ---------------- */
 let AC = null;
@@ -199,7 +202,7 @@ function gotoScene(type, spawnTile){
     if(type==='home') buildHome(); else if(type==='vacation') buildVacation(); else buildTown();
     const sp = spawnTile || (type==='home'? homeDef().spawn : type==='vacation'? (scene.vac?scene.vac.spawn:[7,7]) : TOWN_SPAWN);
     S.px=(sp[0]+.5)*T; S.py=(sp[1]+.5)*T; S.scene=type;
-    path=[]; pending=null; action=null; pendingMove=null;
+    path=[]; pending=null; action=null; pendingMove=null; camFree=false;
     centerCam(true);
   };
 }
@@ -277,12 +280,19 @@ function goNextTo(c,r,then){
 /* ============================================================ */
 function resize(){
   const wrap=el('canvasWrap');
+  vw=BASE_VW/zoom; vh=BASE_VH/zoom;            // zoom changes how much world fits the screen
   scale=Math.min(wrap.clientWidth/vw, wrap.clientHeight/vh);
   const dpr=window.devicePixelRatio||1;
   cv.style.width=vw*scale+'px'; cv.style.height=vh*scale+'px';
   cv.width=Math.round(vw*scale*dpr); cv.height=Math.round(vh*scale*dpr);
   ctx.setTransform(scale*dpr,0,0,scale*dpr,0,0);
   ctx.imageSmoothingEnabled=false;
+}
+function clampCam(){
+  if(!scene) return;
+  const worldW=scene.cols*T, worldH=scene.rows*T;
+  cam.x=clamp(cam.x,0,Math.max(0,worldW-vw)); cam.y=clamp(cam.y,0,Math.max(0,worldH-vh));
+  if(worldW<vw) cam.x=(worldW-vw)/2; if(worldH<vh) cam.y=(worldH-vh)/2;
 }
 function centerCam(snap){
   const worldW=scene.cols*T, worldH=scene.rows*T;
@@ -291,11 +301,17 @@ function centerCam(snap){
   if(worldW<vw) tx=(worldW-vw)/2; if(worldH<vh) ty=(worldH-vh)/2;
   if(snap){ cam.x=tx; cam.y=ty; } else { cam.x+=(tx-cam.x)*0.18; cam.y+=(ty-cam.y)*0.18; }
 }
+// + / − zoom buttons (and pinch) call this. Keeps the player centered while following.
+function setZoom(factor){
+  if(!S||!scene) return;
+  const z=clamp(zoom*factor, Z_MIN, Z_MAX); if(Math.abs(z-zoom)<0.001) return;
+  zoom=z; resize(); if(camFree) clampCam(); else centerCam(true);
+}
 
 /* ----- tiles ----- */
 function drawTerrain(){
   const c0=Math.floor(cam.x/T), r0=Math.floor(cam.y/T);
-  const c1=Math.min(scene.cols, c0+VIEW_COLS+2), r1=Math.min(scene.rows, r0+VIEW_ROWS+2);
+  const c1=Math.min(scene.cols, c0+Math.ceil(vw/T)+2), r1=Math.min(scene.rows, r0+Math.ceil(vh/T)+2);
   for(let r=Math.max(0,r0); r<r1; r++) for(let c=Math.max(0,c0); c<c1; c++){
     const x=c*T-cam.x, y=r*T-cam.y, ch=scene.map[r][c];
     if(scene.type==='town') drawTownTile(x,y,c,r,ch);
@@ -521,14 +537,22 @@ function drawFurn(t,x,y,o){
       box(x+3,y+4,T-6,T-8,4,'#caa15e');
       const baby=(S.kids||[]).find(k=>(k.age||0)<CHILD_AGE);
       if(baby){
+        const giggling=performance.now()-babyGiggle<2400;
+        const bob=giggling?Math.abs(Math.sin(performance.now()/120))*3:0, hy=y+11-bob;
         rr(x+7,y+10,T-14,T-18,4,'#ffd1dc');                                 // blanket
-        ctx.fillStyle=S.skin; ctx.beginPath(); ctx.arc(x+T/2,y+11,4.5,0,7); ctx.fill();
+        ctx.fillStyle=S.skin; ctx.beginPath(); ctx.arc(x+T/2,hy,4.5,0,7); ctx.fill();
         ctx.strokeStyle=COL.outline; ctx.lineWidth=1; ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(x+T/2-2,y+11.5); ctx.lineTo(x+T/2-0.5,y+11.5);
-        ctx.moveTo(x+T/2+0.5,y+11.5); ctx.lineTo(x+T/2+2,y+11.5); ctx.stroke(); // sleepy eyes
-        const zt=(performance.now()/700)%3;
-        ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font='700 8px -apple-system';
-        ctx.fillText('z',x+T-9,y+8-zt*3);
+        if(giggling){
+          ctx.fillStyle='#1d1626'; ctx.beginPath(); ctx.arc(x+T/2-1.7,hy-0.5,0.9,0,7); ctx.arc(x+T/2+1.7,hy-0.5,0.9,0,7); ctx.fill();   // bright eyes
+          ctx.strokeStyle='#c0392b'; ctx.lineWidth=1; ctx.beginPath(); ctx.arc(x+T/2,hy+1,2,0.15*Math.PI,0.85*Math.PI); ctx.stroke();     // big smile
+          ctx.font='9px -apple-system'; ctx.textAlign='center'; ctx.fillText('😄',x+T-7,hy-5); ctx.textAlign='left';
+        } else {
+          ctx.beginPath(); ctx.moveTo(x+T/2-2,hy+0.5); ctx.lineTo(x+T/2-0.5,hy+0.5);
+          ctx.moveTo(x+T/2+0.5,hy+0.5); ctx.lineTo(x+T/2+2,hy+0.5); ctx.stroke();   // sleepy eyes
+          const zt=(performance.now()/700)%3;
+          ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font='700 8px -apple-system';
+          ctx.fillText('z',x+T-9,y+8-zt*3);
+        }
       } else {
         for(let i=0;i<4;i++){ ctx.fillStyle='#8a6a3a'; ctx.fillRect(x+6+i*7,y+6,2,T-14); }
         rr(x+8,y+T-12,T-16,7,3,'#ffd1dc');
@@ -916,7 +940,7 @@ function tick(dt){
   const n=S.needs;
   const decorLv=S.homeLv?S.homeLv.decor:0;
   for(const d of NEEDS){
-    let rate=d.decay;
+    let rate=d.decay*NEEDS_DECAY_MULT;   // global gentler-needs softener
     if(sleeping){ if(d.k==='energy') continue; rate*=(d.k==='bladder'?0.55:d.k==='hunger'?0.5:0.18); }
     if(S.career==='doctor') rate*=0.85;                                  // career perks
     if(S.career==='artist'&&d.k==='fun') rate*=0.7;
@@ -1187,7 +1211,13 @@ function showObjectSheet(o,key){
     }
   }
   else if(t==='kidbed'||t==='crib'){
-    if(S.kids&&S.kids.length){ add('🧸','Play with kid','+fun, makes them happy','p',()=>kidPlay(o,key)); add('📖','Read a bedtime story','+social +fun','r',()=>doAct(o,key,'📖','Story time',{fun:14,social:16},18,()=>{ qprogress('kidplay'); })); }
+    const baby=(S.kids||[]).find(k=>(k.age||0)<CHILD_AGE);
+    if(baby){
+      add('👋','Peekaboo!','Instant giggles 😄','pk',()=>babyPlay(baby,'👋','Peekaboo',{fun:18,social:8},['😄 giggles!','🤭 hee hee!','✨ pure delight!']));
+      add('🤗','Tickle','Squeals of joy','tk',()=>babyPlay(baby,'🤗','Tickle time',{fun:20,social:6},['😆 squeals!','🥰 so happy!','😁 more, more!']));
+      add('🎵','Sing a lullaby','Cozy & calm · +social','lb',()=>babyPlay(baby,'🎵','Lullaby',{social:20,fun:8,energy:5},['😴 soothed','🥱 so cozy','💜 content']));
+      add('🍼','Feed the baby','Full tummy, happy baby','fd',()=>babyPlay(baby,'🍼','Feeding',{social:12,fun:8},['😋 yum yum!','🍼 all gone!','😊 satisfied']));
+    } else if(S.kids&&S.kids.length){ add('🧸','Play with kid','+fun, makes them happy','p',()=>kidPlay(o,key)); add('📖','Read a bedtime story','+social +fun','r',()=>doAct(o,key,'📖','Story time',{fun:14,social:16},18,()=>{ qprogress('kidplay'); })); }
     else add('🛒','No child yet','Start a family first (👪)','x',()=>{ closeSheet(); openFamily(); });
   }
   else if(t==='tv2'||t==='tv3'){
@@ -1271,6 +1301,15 @@ function gig(o,key){
 function kidPlay(o,key){
   action={objKey:key, kind:'timed', icon:'🧸', label:'Playing with kid', fx:{fun:24,social:18,energy:-6}, total:22, left:22,
     done:()=>{ burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); const k=S.kids[0]; if(k) k.happy=clamp((k.happy||50)+20,0,100); qprogress('kidplay'); addXP(15); toast('🧸 '+(S.kids[0]?S.kids[0].name:'Your kid')+' had a blast!'); } };
+  closeSheet();
+}
+function babyPlay(baby,icon,label,fx,lines){
+  action={kind:'timed',icon,label:label+' with '+baby.name,fx,total:13,left:13,
+    done:()=>{ baby.happy=clamp((baby.happy||60)+24,0,100); babyGiggle=performance.now();
+      burst(S.px-cam.x,S.py-cam.y-30,'heart'); burst(S.px-cam.x,S.py-cam.y-46,'confetti');
+      const crib=findFurn('crib'); if(crib){ for(let i=0;i<5;i++) parts.push({x:(crib.c+.5)*T-cam.x+(Math.random()-.5)*20,y:crib.r*T-cam.y-2,vx:(Math.random()-.5)*14,vy:-26-Math.random()*14,life:1.1,t:'heart'}); }
+      SFX.heart(); qprogress('kidplay'); addXP(12);
+      toast(icon+' '+baby.name+': '+lines[Math.floor(Math.random()*lines.length)]); }};
   closeSheet();
 }
 function findFurn(t){ for(const [k,o] of scene.furnAt){ if(o.t===t) return o; } return null; }
@@ -2094,6 +2133,28 @@ function refreshLifeDot(){ const any=S.quests.some(q=>q.done&&!q.claimed); el('l
 
 /* family */
 function openFamily(){ closeSheet(); lifeTab='people'; renderLife(); }
+function openHelp(){
+  closeSheet(); genActions={};
+  const row=(ic,txt)=>`<div class="helpRow"><span class="helpIc">${ic}</span><span>${txt}</span></div>`;
+  let body=`<h2>📖 How to Play</h2>`
+    +`<div class="sub">Pocket Life is a cozy life sim — no way to "lose", just live a good life. 🌱</div>`
+    +`<label>Getting around</label>`
+    +row('🖐️','<b>Drag</b> the screen to look around the map.')
+    +row('👆👆','<b>Double-tap</b> any open tile to walk there.')
+    +row('➕➖','Tap the <b>+/−</b> between your needs to zoom in & out.')
+    +row('👋','<b>Single-tap</b> furniture or a person to interact with them.')
+    +`<label>Living your life</label>`
+    +row('📊','Keep your <b>needs</b> (bottom bars) out of the red — eat, sleep, wash, have fun. They drain slowly, so relax.')
+    +row('🚪💼','<b>Go Out</b> to explore town & take vacations; <b>Work</b> to earn coins and climb your career.')
+    +row('🛍️','<b>Shop</b> for homes, outfits, vehicles & upgrades that make life easier.')
+    +row('👪','<b>Life</b> holds your quests, relationships, family tree & save/transfer code.')
+    +`<label>The big picture 🎯</label>`
+    +row('💞','Make friends, fall in love, marry & raise a family — name your kids and watch them grow.')
+    +row('🌳','When your sim grows old, live on through an heir and grow your family <b>legacy</b> across generations.')
+    +`<button class="closebtn" data-g="close">Got it!</button>`;
+  genActions.close=closeModal;
+  openModal(body);
+}
 function renderPeople(){
   genActions={};
   let body=`<h2>👪 People</h2><div class="sub">You're playing <b>${S.name} ${S.surname||''}</b> · ${ageLabel(S.age||START_AGE)} · gen ${S.generation||1}</div>`;
@@ -2290,7 +2351,14 @@ function rebuildAll(){
 /* needs UI */
 const barEls={};
 function buildNeedsUI(){ const box=el('needs'); box.innerHTML=''; for(const d of NEEDS){ const div=document.createElement('div'); div.className='need';
-  div.innerHTML='<span class="ic">'+d.ic+'</span><span class="lbl">'+d.lbl+'</span><div class="bar"><i></i></div>'; box.appendChild(div); barEls[d.k]=div.querySelector('i'); } }
+  div.innerHTML='<span class="ic">'+d.ic+'</span><span class="lbl">'+d.lbl+'</span><div class="bar"><i></i></div>'; box.appendChild(div); barEls[d.k]=div.querySelector('i'); }
+  // zoom control: a + / − stack tucked into the gap between the two needs columns
+  const z=document.createElement('div'); z.id='zoomCtl';
+  z.innerHTML='<button id="zoomIn" aria-label="Zoom in">+</button><button id="zoomOut" aria-label="Zoom out">−</button>';
+  box.appendChild(z);
+  z.querySelector('#zoomIn').onclick=()=>setZoom(1.18);
+  z.querySelector('#zoomOut').onclick=()=>setZoom(1/1.18);
+}
 let hudT=0;
 function updateHUD(){
   if(!S) return; const now=performance.now(); if(now-hudT<180) return; hudT=now;
@@ -2310,44 +2378,78 @@ function updateHUDNow(){ hudT=0; updateHUD(); }
 /* ============================================================ */
 /*                        INPUT                                 */
 /* ============================================================ */
+/* Input: one finger drags to pan the map (free camera), a quick double-tap on open
+   ground walks you there, a single tap uses furniture/people. Two fingers pinch to
+   zoom. The page itself never scrolls/zooms — #cv has touch-action:none. */
+const activePtrs=new Map();
+let dragStart=null, dragged=false, panLast=null, pinchStart=null;
+let lastTap={t:0,c:-9,r:-9};
+function ptrDist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
+
 cv.addEventListener('pointerdown',e=>{
-  if(!S||S.atWork||S.hospital||S.studying||paused||transition>0) return;
+  if(!S||!scene) return;
+  cv.setPointerCapture&&cv.setPointerCapture(e.pointerId);
+  activePtrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(activePtrs.size===2){ const p=[...activePtrs.values()]; pinchStart={d:ptrDist(p[0],p[1]),zoom}; dragStart=null; panLast=null; return; }
   if(!AC){ blip(1,0.001,'sine',0.0001); } // unlock audio on first touch
+  dragStart={x:e.clientX,y:e.clientY}; dragged=false; panLast={x:e.clientX,y:e.clientY};
+});
+cv.addEventListener('pointermove',e=>{
+  if(!S||!scene||!activePtrs.has(e.pointerId)) return;
+  activePtrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pinchStart&&activePtrs.size>=2){ const p=[...activePtrs.values()]; const d=ptrDist(p[0],p[1]);
+    if(pinchStart.d>0){ zoom=clamp(pinchStart.zoom*(d/pinchStart.d),Z_MIN,Z_MAX); resize(); if(camFree) clampCam(); else centerCam(true); } return; }
+  if(!dragStart) return;
+  if(!dragged && Math.hypot(e.clientX-dragStart.x,e.clientY-dragStart.y)>7) dragged=true;
+  if(dragged){ camFree=true; cam.x-=(e.clientX-panLast.x)/scale; cam.y-=(e.clientY-panLast.y)/scale; panLast={x:e.clientX,y:e.clientY}; clampCam(); }
+});
+function endPtr(e){
+  const wasPinch=pinchStart&&activePtrs.size>=2;
+  activePtrs.delete(e.pointerId); if(activePtrs.size<2) pinchStart=null;
+  const ds=dragStart, wasDrag=dragged; dragStart=null; panLast=null;
+  if(wasPinch||!ds||wasDrag) return;   // a pinch or a pan — not a tap
+  handleTap(e);
+}
+cv.addEventListener('pointerup',endPtr);
+cv.addEventListener('pointercancel',e=>{ activePtrs.delete(e.pointerId); pinchStart=null; dragStart=null; });
+
+function handleTap(e){
+  if(S.atWork||S.hospital||S.studying||paused||transition>0) return;
   const rect=cv.getBoundingClientRect();
   const wx=(e.clientX-rect.left)/scale+cam.x, wy=(e.clientY-rect.top)/scale+cam.y;
   const c=Math.floor(wx/T), r=Math.floor(wy/T);
-  const prevPending=pendingMove; pendingMove=null;   // any tap clears the aim; interactions below won't re-set it
   // npc? (forgiving: snap to nearest NPC within ~1.4 tiles of the tap)
   if(scene.type==='town'){
     let best=null, bestD=T*1.4;
     for(const n of npcSprites){ const dd=Math.hypot(n.px-wx,n.py-wy); if(dd<bestD){ bestD=dd; best=n; } }
     if(best){ tapNPC(best); return; }
-    const door=scene.doors.get(c+','+r); if(door&&door.startsWith('B:')){ goNextTo(c,r,()=>enterBuilding(door.slice(2))); return; }
+    const door=scene.doors.get(c+','+r); if(door&&door.startsWith('B:')){ camFree=false; goNextTo(c,r,()=>enterBuilding(door.slice(2))); return; }
   } else {
     // partner / kid at home?
     let best=null, bestD=T*1.3;
     for(const n of homies){ const dd=Math.hypot(n.px-wx,n.py-wy); if(dd<bestD){ bestD=dd; best=n; } }
-    if(best){ SFX.tap(); const tc=Math.floor(best.px/T), tr=Math.floor(best.py/T);
+    if(best){ SFX.tap(); const tc=Math.floor(best.px/T), tr=Math.floor(best.py/T); camFree=false;
       goNextTo(tc,tr,()=> best.kind==='partner'?showNPCSheet(S.partner): best.kind==='grown'?showMemberSheet(best.mid): showKidSheet(best.idx)); return; }
   }
   // furniture?
-  const o=scene.furnAt.get(c+','+r); if(o){ tapObject(o); return; }
-  // walk — tap a tile to aim (drops a marker), tap that SAME tile again to go.
-  // No timing window, so the two taps are naturally spaced and never trigger iOS double-tap zoom.
+  const o=scene.furnAt.get(c+','+r); if(o){ camFree=false; tapObject(o); return; }
+  // empty walkable tile → DOUBLE-tap to walk there (single tap just confirms the spot)
   if(walkable(c,r)){
-    if(prevPending && prevPending.c===c && prevPending.r===r){ SFX.tap(); goTo(c,r,null); }
-    else { pendingMove={c,r}; blip(420,0.04,'sine',0.02); }
+    const now=performance.now();
+    if(now-lastTap.t<360 && Math.abs(lastTap.c-c)<=1 && Math.abs(lastTap.r-r)<=1){
+      lastTap.t=0; pendingMove=null; camFree=false; SFX.tap(); goTo(c,r,null);
+    } else { lastTap={t:now,c,r}; pendingMove={c,r,t:now}; blip(420,0.04,'sine',0.02); }
   }
-});
+}
 function drawMoveHint(){
   if(!pendingMove) return;
+  const age=performance.now()-(pendingMove.t||0);
+  if(age>700){ pendingMove=null; return; }
   const x=(pendingMove.c+.5)*T-cam.x, y=(pendingMove.r+.5)*T-cam.y;
-  const pl=performance.now()/300, rad=8+2.5*Math.sin(pl);
-  ctx.strokeStyle='rgba(255,232,160,.85)'; ctx.lineWidth=2;
+  const a=Math.max(0,1-age/700), rad=7+7*(age/700);
+  ctx.strokeStyle='rgba(255,232,160,'+(0.8*a).toFixed(2)+')'; ctx.lineWidth=2;
   ctx.beginPath(); ctx.arc(x,y,rad,0,7); ctx.stroke();
-  ctx.fillStyle='rgba(255,232,160,.45)'; ctx.beginPath(); ctx.arc(x,y,3,0,7); ctx.fill();
-  ctx.fillStyle='rgba(255,240,190,'+(0.7+0.3*Math.sin(pl)).toFixed(2)+')';
-  ctx.font='700 9px -apple-system'; ctx.textAlign='center'; ctx.fillText('tap to go',x,y-15); ctx.textAlign='left';
+  ctx.fillStyle='rgba(255,232,160,'+(0.5*a).toFixed(2)+')'; ctx.beginPath(); ctx.arc(x,y,2.5,0,7); ctx.fill();
 }
 
 /* buttons (wired from index via Game.* ) */
@@ -2462,7 +2564,7 @@ function begin(){
 }
 function loop(now){
   const dt=Math.min(0.05,(lastFrame? (now-lastFrame)/1000 : 0)); lastFrame=now;
-  if(S&&!paused&&!userPaused){ moveSim(dt); tickNPCs(dt); tickHomies(dt); tick(dt); updateParts(dt); centerCam(false); }
+  if(S&&!paused&&!userPaused){ moveSim(dt); tickNPCs(dt); tickHomies(dt); tick(dt); updateParts(dt); if(!camFree) centerCam(false); }
   if(transition>0){ transition-=dt*3.2; if(transition<=0.5&&transitionTo){ transitionTo(); transitionTo=null; } if(transition<0) transition=0; }
   draw(); updateHUD();
   requestAnimationFrame(loop);
@@ -2477,7 +2579,8 @@ return {
   bootProfiles:()=>Profiles.show(),
   showCreate,
   toggleOut, quickWork, toggleSpeed, togglePause,
-  openShop, openQuests, openFamily,
+  openShop, openQuests, openFamily, openHelp,
+  zoomIn:()=>setZoom(1.18), zoomOut:()=>setZoom(1/1.18), recenter:()=>{ camFree=false; },
   startLoop:()=>requestAnimationFrame(loop),
   _dbg:()=>({S, scene, homies, npcCount:npcSprites.length, rebuild:()=>{ if(scene.type==='home') buildHome(); else buildTown(); },
     enter:(bid)=>enterBuilding(bid), uni:()=>showUniversity(), biz:()=>showBusinessCenter(), school:()=>showSchool(),

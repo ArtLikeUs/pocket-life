@@ -403,6 +403,8 @@ const NEEDS = [
   { k:'fun',     ic:'🎉', lbl:'Fun',     decay:3.6 },
   { k:'social',  ic:'💬', lbl:'Social',  decay:2.8 },
 ];
+// Global softener on how fast needs drain (1 = original). Lower = gentler, less of a chore.
+const NEEDS_DECAY_MULT = 0.65;
 const JOBS = ['Intern','Barista','Designer','Manager','Director','CEO']; // legacy (v2 saves)
 
 /* ---------------- careers ----------------
