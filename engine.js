@@ -182,6 +182,12 @@ function buildHomies(){
     homies.push({kind:'kid', idx:i, name:k.name, look:{skin:S.skin,shirt:k.shirt||'#ffd93d',hair:S.hair,style:0},
       px:(kz.x+1+(i%Math.max(1,kz.w-1))+.5)*T, py:(kz.y+2+.5)*T, zone:kz, dir:'S', wt:0, cool:1+Math.random()*2, tpath:[], sc:k.age>=TEEN_AGE?0.85:0.7});
   });
+  // hired help — only on screen while their contract is active, in themed looks
+  SERVICES.forEach((sv,i)=>{ if(!svc(sv.id)) return; const z=sv.id==='nanny'?kz:pz;
+    homies.push({kind:'staff', svc:sv.id, name:sv.role, badge:sv.icon,
+      look:{skin:SKINS[(i+3)%SKINS.length], shirt:sv.shirt, hair:HAIRC[(i+1)%HAIRC.length], style:0, dress:sv.dress, lashes:false},
+      px:(z.x+1+(i%Math.max(1,z.w-1))+.5)*T, py:(z.y+1+.5)*T, zone:z, dir:'S', wt:0, cool:1+Math.random()*3, tpath:[], sc:1});
+  });
 }
 function tickHomies(dt){
   if(!scene||(scene.type!=='home'&&scene.type!=='vacation')) return;
@@ -752,10 +758,11 @@ function drawActors(){
       const x=n.px-cam.x, y=n.py-cam.y;
       drawPerson(x,y,n.look,n.dir,n.tpath.length?n.wt:0,n.sc);
       const ny=n.sc<1?y-40:y-52;
-      rr(x-17,ny-9,34,12,4,'rgba(20,16,38,.75)');
+      const lbl=n.kind==='partner'?n.name+' 💞':n.kind==='staff'?(n.badge+' '+n.name):n.name;
+      rr(x-19,ny-9,38,12,4,'rgba(20,16,38,.75)');
       ctx.font='700 9px -apple-system'; ctx.textAlign='center';
-      ctx.fillStyle=n.kind==='partner'?'#ff9fc0':'#9fe0b0';
-      ctx.fillText(n.kind==='partner'?n.name+' 💞':n.name, x, ny); ctx.textAlign='left';
+      ctx.fillStyle=n.kind==='partner'?'#ff9fc0':n.kind==='staff'?'#ffd76a':'#9fe0b0';
+      ctx.fillText(lbl, x, ny); ctx.textAlign='left';
     }
   }
   // player
@@ -767,16 +774,17 @@ function drawPlayer(){
   if(action&&action.woo){ drawCensor(); return; }
   const sleeping=action&&action.kind==='sleep';
   const riding=scene.type==='town'&&S.vehicle&&path.length>0;
+  const ps=kahunaActive()?2:1;   // 🌟 Big Kahuna: tower over everyone
   if(sleeping){
     ctx.font='800 12px -apple-system'; const zt=(performance.now()/600)%3;
-    drawPerson(x,y,playerLook(),'S',0,0.9);
+    drawPerson(x,y,playerLook(),'S',0,0.9*ps);
     ctx.fillStyle='rgba(255,255,255,.9)'; ctx.fillText('z',x+10,y-44-zt*5); ctx.fillText('Z',x+16,y-54-zt*5);
   } else if(riding){
     drawRide(x,y);
   } else {
-    drawPerson(x,y,playerLook(),facing,path.length?walkT:0);
+    drawPerson(x,y,playerLook(),facing,path.length?walkT:0,ps);
   }
-  if(!sleeping) drawPlumbob(x, y-(riding?40:48));
+  if(!sleeping) drawPlumbob(x, y-(riding?40:48)*(ps>1?1.6:1));
   drawBubble(x,y);
 }
 function drawPlumbob(x,topY){
@@ -856,6 +864,7 @@ function draw(){
   drawFurniture();
   drawActors();
   drawMoveHint();
+  drawCheatHint();
   drawParts();
   const na=nightAlpha(); if(na>0){ ctx.fillStyle='rgba(16,18,52,'+na+')'; ctx.fillRect(0,0,vw,vh); }
   if(transition>0){ ctx.fillStyle='rgba(8,6,16,'+transition+')'; ctx.fillRect(0,0,vw,vh); }
@@ -914,7 +923,15 @@ function showNextLevelUp(){
   el('lvlGo').onclick=()=>{ levelQueue.shift(); SFX.good(); updateHUDNow(); save(); showNextLevelUp(); };
 }
 function addCoins(n){ S.coins+=n; if(S.stats) S.stats.peakCoins=Math.max(S.stats.peakCoins||0,Math.floor(S.coins)); const c=el('coins'); c.classList.add('bump'); setTimeout(()=>c.classList.remove('bump'),160); }
-function spend(n){ if(S.coins<n){ toast("Not enough coins 💰"); SFX.err(); return false; } S.coins-=n; return true; }
+function spend(n){ if(kahunaActive()) return true;   // 🌟 Big Kahuna: everything's free
+  if(S.coins<n){ toast("Not enough coins 💰"); SFX.err(); return false; } S.coins-=n; return true; }
+/* ---- Wave 6 helpers: services + cheats ---- */
+function svc(id){ return !!(S.services && S.services[id] > S.minutes); }
+function kahunaActive(){ return !!(S.kahunaUntil && S.minutes < S.kahunaUntil); }
+function revealActive(){ return !!(S.cheatRevealUntil && S.minutes < S.cheatRevealUntil); }
+function socialMult(){ let m=1; if(kahunaActive()) m*=1.5; if(S.cheatSocial) m*=1.75; return m; }   // beneficial social boost
+function serviceCost(id, termId){ const term=SERVICE_TERMS.find(t=>t.id===termId); const rate=id==='bundle'?SERVICE_BUNDLE_DAY:SERVICE_DAY;
+  return Math.round(rate*term.days*(1-term.disc)); }
 
 function qprogress(ev,amt){
   amt=amt||1; let any=false;
@@ -948,6 +965,8 @@ function tick(dt){
     if(d.k==='fun'){ const fm={hoodie:0.9, floral:0.88}[S.outfit]; if(fm) rate*=fm; } // outfit perk
     if(decorLv&&(d.k==='fun'||d.k==='social')) rate*=(decorLv>=2?0.65:0.75); // decor tier
     if(S.partner&&d.k==='social') rate*=0.7;
+    if(d.k==='hunger'&&svc('chef')) rate*=0.18;      // 🍳 chef keeps the family fed
+    if(d.k==='hygiene'&&svc('maid')) rate*=0.18;     // 🧹 maid keeps things clean
     n[d.k]=clamp(n[d.k]-rate/60*dtMin,0,100);
   }
 
@@ -973,8 +992,10 @@ function tick(dt){
     const zeros=NEEDS.filter(d=>n[d.k]<=1).length;
     if(n.energy<=0.5||zeros>=3) hospitalize();
   }
-  // kids' happiness ticks continuously
-  if(S.kids) for(const k of S.kids){ k.happy=clamp((k.happy||60)-10*dtMin/1440,0,100); }
+  // kids' happiness ticks continuously (🍼 a nanny keeps them content)
+  if(S.kids) for(const k of S.kids){
+    if(svc('nanny')) k.happy=clamp((k.happy||60)+6*dtMin/1440,0,95);
+    else k.happy=clamp((k.happy||60)-10*dtMin/1440,0,100); }
   // each new day: everyone ages, town turns over
   const today=Math.floor(S.minutes/1440)+1;
   if(today>(S.lastDay||today)){ const days=today-S.lastDay; S.lastDay=today; ageEveryone(days); townDayEvents(); }
@@ -1186,6 +1207,54 @@ function startTimed(o,key,kind,icon,label,fx,dur,onDone){
   action={objKey:key, kind, icon, label, fx, total:dur, left:dur, returnPx:null, done:onDone};
   closeSheet(); toast(label+'…');
 }
+/* ----- hired services (Wave 6) ----- */
+function svcLeft(until){ const m=Math.max(0,until-S.minutes); const d=Math.floor(m/1440), h=Math.floor((m%1440)/60); return d>0?(d+'d'+(h?(' '+h+'h'):'')):(h+'h'); }
+function showServices(){
+  sheetActions={};
+  let body=sheetHead('🛎️',SERVICE_ORG,'Hire help for the household — they only show up while on the clock. 💼');
+  SERVICES.forEach(sv=>{ const active=svc(sv.id);
+    const status=active?('on duty · '+svcLeft(S.services[sv.id])+' left'):sv.blurb;
+    body+=item(sv.icon, sv.role, status, active?{txt:'✓ hired',owned:true}:{txt:SERVICE_DAY+'💰/day'}, `data-a="${sv.id}"`);
+    sheetActions[sv.id]=()=>showServiceHire(sv.id);
+  });
+  body+=item('🌟','Hire all three','The full staff together — '+SERVICE_BUNDLE_DAY+'💰/day (save vs separate)',{txt:'best deal'},'data-a="bundle"');
+  sheetActions.bundle=()=>showServiceHire('bundle');
+  body+=item('✖️','Close','',null,'data-a="x"'); sheetActions.x=closeSheet;
+  openSheet(body); bindSheet();
+}
+function showServiceHire(id){
+  sheetActions={};
+  const isBundle=id==='bundle'; const sv=isBundle?null:SERVICES.find(s=>s.id===id);
+  let body=sheetHead(isBundle?'🌟':sv.icon, isBundle?'Full staff (all three)':sv.role, isBundle?'Nanny + Chef + Maid, contracted together':sv.blurb);
+  SERVICE_TERMS.forEach(term=>{ const cost=serviceCost(id,term.id); const idk='t_'+term.id;
+    body+=item('🗓️', term.label, term.disc?('save '+Math.round(term.disc*100)+'%'):'pay as you go', {txt:cost+'💰'}, `data-a="${idk}"`);
+    sheetActions[idk]=()=>hireService(id,term.id);
+  });
+  body+=item('↩️','Back','',null,'data-a="back"'); sheetActions.back=()=>showServices();
+  openSheet(body); bindSheet();
+}
+function hireService(id, termId){
+  const cost=serviceCost(id,termId); const term=SERVICE_TERMS.find(t=>t.id===termId);
+  if(!spend(cost)) return;
+  const targets=id==='bundle'?['nanny','chef','maid']:[id]; const ext=term.days*1440;
+  for(const t of targets){ S.services[t]=Math.max(S.minutes, S.services[t]||0)+ext; }
+  if(scene&&scene.type==='home') buildHomies();
+  SFX.coin(); burst(S.px-cam.x,S.py-cam.y-30,'coin','-'+cost+'💰'); addXP(10);
+  const who=id==='bundle'?'the full staff':SERVICES.find(s=>s.id===id).role;
+  toast('🛎️ Hired '+who+' for '+term.label+'!'); qprogress('service');
+  closeSheet(); updateHUDNow(); save();
+}
+function showServiceWorker(id){
+  const sv=SERVICES.find(s=>s.id===id); if(!sv){ closeSheet(); return; }
+  sheetActions={};
+  const left=svc(id)?(svcLeft(S.services[id])+' left'):'off duty';
+  let body=sheetHead(sv.icon, sv.role+' · '+SERVICE_ORG, sv.blurb+' · '+left);
+  const add=(icon,title,sub,k,fn)=>{ body+=item(icon,title,sub,null,`data-a="${k}"`); sheetActions[k]=fn; };
+  add('🙏','Thank them','A little gratitude · +fun','tx',()=>{ S.needs.fun=clamp(S.needs.fun+8,0,100); burst(S.px-cam.x,S.py-cam.y-28,'heart'); SFX.good(); closeSheet(); toast('🙏 '+sv.role+' appreciates it!'); });
+  add('🗓️','Extend / manage','Hire more time','mx',()=>showServiceHire(id));
+  add('✖️','Close','','x',closeSheet);
+  openSheet(body); bindSheet();
+}
 function showObjectSheet(o,key){
   const t=o.t, m=o.meta;
   sheetActions={};
@@ -1232,7 +1301,8 @@ function showObjectSheet(o,key){
     add('💼','Freelance gig','Earn 40–90💰 (costs energy & time)','g',()=>gig(o,key));
     add('📹','Video call a friend','+social','v',()=>doAct(o,key,'📹','Video call',{social:40,fun:8},25,()=>qprogress('social')));
   }
-  else if(t==='phone'){ add('📞','Call a friend','+social','x',()=>doAct(o,key,'📞','Calling',{social:48},22,()=>qprogress('social'))); }
+  else if(t==='phone'){ add('📞','Call a friend','+social','x',()=>doAct(o,key,'📞','Calling',{social:48},22,()=>qprogress('social')));
+    add('🛎️','Hire household help',SERVICE_ORG,'svc',()=>{ closeSheet(); showServices(); }); }
   else if(t==='bookshelf'||t==='bookshelf1'){ add('📖','Read a book','+fun, calm','x',()=>doAct(o,key,'📖','Reading',{fun:22,energy:-2},40)); }
   else if(t==='toybox'){ add('🪀','Play around','+fun','x',()=>doAct(o,key,'🪀','Playing',{fun:26},20, ()=>{ if(S.kids&&S.kids.length) qprogress('kidplay'); })); }
   else if(t==='treadmill'){ const tr=S.career==='trainer';
@@ -1436,7 +1506,7 @@ function npcSocial(id,kind,fx,dur,romantic){
   if(S.needs.energy<5){ toast('Too tired to socialize ⚡'); SFX.err(); return; }
   const def=npcDef(id);
   action={kind:'timed', icon:romantic?'💘':'💬', label:'With '+def.name, fx, total:dur, left:dur,
-    done:()=>{ const amt=(romantic?9:6) + (kind==='compliment'?2:0) + ({dress:2,gown:2,blouse:1}[S.outfit]||0); rel(id, amt);
+    done:()=>{ const amt=Math.round(((romantic?9:6) + (kind==='compliment'?2:0) + ({dress:2,gown:2,blouse:1}[S.outfit]||0))*socialMult()); rel(id, amt);
       if(romantic){ S.rels[id].romance=true; burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); }
       else { burst(S.px-cam.x,S.py-cam.y-30,'spark', CHAT_LINES[Math.floor(Math.random()*CHAT_LINES.length)].split(' ').pop()); SFX.good(); }
       S.stats.social=(S.stats.social||0)+1; qprogress('social'); addXP(8);
@@ -1446,7 +1516,7 @@ function npcSocial(id,kind,fx,dur,romantic){
 function npcDate(id){
   const def=npcDef(id);
   action={kind:'timed', icon:'🌹', label:'On a date with '+def.name, fx:{fun:30,social:35,energy:-6}, total:40, left:40,
-    done:()=>{ rel(id,18); S.rels[id].romance=true; burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); addXP(20); toast('🌹 Lovely date with '+def.name+'!'); } };
+    done:()=>{ rel(id,Math.round(18*socialMult())); S.rels[id].romance=true; burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); addXP(20); toast('🌹 Lovely date with '+def.name+'!'); } };
   closeSheet();
 }
 function giftPicker(id){
@@ -1455,7 +1525,7 @@ function giftPicker(id){
   GIFTS.forEach(g=>{ const have=(S.gifts&&S.gifts[g.id])||0; if(have<=0) return; any=true;
     const idk='g'+g.id; body+=item(g.icon,g.name,'x'+have+(g.rel?' · +'+g.rel+'❤':''),null,`data-a="${idk}"`);
     sheetActions[idk]=()=>{ S.gifts[g.id]--; if(g.id==='ring'){ closeSheet(); toast('Use 💍 via Propose 💍'); return; }
-      rel(id,g.rel); burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); qprogress('gift'); addXP(12);
+      rel(id,Math.round(g.rel*socialMult())); burst(S.px-cam.x,S.py-cam.y-30,'heart'); SFX.heart(); qprogress('gift'); addXP(12);
       toast(npcDef(id).name+' loved the '+g.name+'! +'+g.rel+'❤'); closeSheet(); }; });
   if(!any) body+=`<p style="color:#bdb6d6;font-size:12px;margin-top:8px">Your gift bag is empty. Buy some at 🛍️ Maple Mall.</p>`;
   body+=item('↩️','Back','','',`data-a="back"`); sheetActions.back=()=>showNPCSheet(id);
@@ -2155,6 +2225,47 @@ function openHelp(){
   genActions.close=closeModal;
   openModal(body);
 }
+/* ----- hidden cheat menu (Wave 6) ----- */
+let cheatSeq=0, cheatSeqT=0;
+function cheatTileTap(c,r){
+  const tiles=(homeDef().cheat)||[]; if(!tiles.length) return false;
+  const idx=tiles.findIndex(t=>t[0]===c&&t[1]===r); if(idx<0) return false;
+  const now=performance.now(); if(now-cheatSeqT>2500) cheatSeq=0; cheatSeqT=now;
+  const expected=cheatSeq%2;                 // A,B,A,B,A,B → 0,1,0,1,0,1
+  if(idx===expected){ cheatSeq++; blip(280+cheatSeq*45,0.03,'sine',0.014);
+    if(cheatSeq>=6){ cheatSeq=0; openCheats(); } }
+  else cheatSeq=(idx===0)?1:0;               // wrong tile → restart the pattern
+  return true;                               // a tap on a cheat tile never walks
+}
+function openCheats(){
+  closeSheet();
+  if(!revealActive()){
+    const toll=shiftPay();
+    if(!spend(toll)){ toast("You'll need about a shift's pay ("+toll+"💰) to crack this open"); SFX.err(); return; }
+    SFX.coin(); toast('🤫 The floor clicks open… (−'+toll+'💰)');
+  }
+  renderCheats();
+}
+function renderCheats(){
+  genActions={};
+  const passCost=Math.round(0.4*shiftPay()*5);
+  let body=`<h2>🃏 Secret Menu</h2>`
+    +`<div class="sub">Shhh. ${revealActive()?('Pass active · '+svcLeft(S.cheatRevealUntil)+' left'):"Opening here costs about a shift's pay each time."}</div>`;
+  const row=(ic,title,desc,key)=>`<button class="cheatBtn" data-g="${key}"><span class="cheatIc">${ic}</span><span class="cheatTxt"><b>${title}</b><span>${desc}</span></span></button>`;
+  body+=row('💰','Instant Rich','Drop $500,000 into your account.','rich');
+  body+=row('💖','Fulfill All Needs','Top up every need for you and the whole household.','needs');
+  body+=row('🌟','The Big Kahuna','3 days as a giant: everything free, paid days off, +50% loved.','kahuna');
+  body+=row('🎮','Game Got Em'+(S.cheatSocial?' ✓':''),'Every social interaction +75% better. Tap to toggle.','social');
+  if(!revealActive()) body+=row('✨','Reveal pass','Mark the secret tiles & open free for a game-week — '+passCost+'💰.','pass');
+  body+=`<button class="closebtn" data-g="close">Close</button>`;
+  genActions.rich=()=>{ addCoins(500000); SFX.coin(); burst(vw/2,vh/3,'coin','+$500K'); toast('💰 Instant Rich — +$500,000!'); save(); renderCheats(); };
+  genActions.needs=()=>{ for(const d of NEEDS) S.needs[d.k]=100; (S.members||[]).forEach(m=>{ if(m.needs) for(const d of NEEDS) m.needs[d.k]=100; }); (S.kids||[]).forEach(k=>k.happy=100); SFX.good(); burst(vw/2,vh/3,'heart'); toast('💖 The whole household is fully refreshed!'); updateHUDNow(); save(); };
+  genActions.kahuna=()=>{ S.kahunaUntil=S.minutes+3*1440; SFX.level(); burst(vw/2,vh/3,'confetti'); toast('🌟 THE BIG KAHUNA! Three days of giant, free, beloved living.'); save(); if(scene&&scene.type==='home') buildHomies(); closeModal(); };
+  genActions.social=()=>{ S.cheatSocial=!S.cheatSocial; SFX.good(); toast(S.cheatSocial?'🎮 Game Got Em ON — social +75%.':'Game Got Em off.'); save(); renderCheats(); };
+  genActions.pass=()=>{ if(!spend(passCost)) return; S.cheatRevealUntil=S.minutes+7*1440; SFX.coin(); toast('✨ Secret tiles revealed — free for a game-week.'); save(); renderCheats(); };
+  genActions.close=closeModal;
+  openModal(body);
+}
 function renderPeople(){
   genActions={};
   let body=`<h2>👪 People</h2><div class="sub">You're playing <b>${S.name} ${S.surname||''}</b> · ${ageLabel(S.age||START_AGE)} · gen ${S.generation||1}</div>`;
@@ -2234,6 +2345,7 @@ function freshState(opts){
     members:[], mid:'founder', role:'You', surname:FAMILY_SURNAMES[Math.floor(Math.random()*FAMILY_SURNAMES.length)], generation:1,
     tree:[{tid:'t0', name:opts.name, gen:1, parents:[], alive:true}], tid:'t0', _tnext:1,
     vacay:null,
+    services:{nanny:0,chef:0,maid:0}, kahunaUntil:0, cheatSocial:false, cheatRevealUntil:0,
     vehicles:[], vehicle:null, gifts:{},
     rels:{}, partner:null, kids:[], quests:[], stats:{}, warned:{} };
   return s;
@@ -2268,6 +2380,11 @@ function normalize(s){
   if(typeof s.generation!=='number') s.generation=1;
   s.stats=s.stats||{}; if(typeof s.stats.peakCoins!=='number') s.stats.peakCoins=Math.floor(s.coins||0);
   if(s.vacay===undefined) s.vacay=null;
+  // wave 6: hired services + cheats
+  s.services=s.services||{}; for(const k of ['nanny','chef','maid']) if(typeof s.services[k]!=='number') s.services[k]=0;
+  if(typeof s.kahunaUntil!=='number') s.kahunaUntil=0;
+  if(typeof s.cheatSocial!=='boolean') s.cheatSocial=false;
+  if(typeof s.cheatRevealUntil!=='number') s.cheatRevealUntil=0;
   if(!s.tree||!s.tree.length){ s.tree=[{tid:'t0', name:s.name, gen:s.generation||1, parents:[], alive:true}]; s.tid='t0'; s._tnext=1; }
   if(!s.tid) s.tid='t0'; if(typeof s._tnext!=='number') s._tnext=s.tree.length;
   // migrate an existing spouse (NPC partner) into a controllable member
@@ -2429,16 +2546,27 @@ function handleTap(e){
     let best=null, bestD=T*1.3;
     for(const n of homies){ const dd=Math.hypot(n.px-wx,n.py-wy); if(dd<bestD){ bestD=dd; best=n; } }
     if(best){ SFX.tap(); const tc=Math.floor(best.px/T), tr=Math.floor(best.py/T); camFree=false;
-      goNextTo(tc,tr,()=> best.kind==='partner'?showNPCSheet(S.partner): best.kind==='grown'?showMemberSheet(best.mid): showKidSheet(best.idx)); return; }
+      goNextTo(tc,tr,()=> best.kind==='partner'?showNPCSheet(S.partner): best.kind==='grown'?showMemberSheet(best.mid): best.kind==='staff'?showServiceWorker(best.svc): showKidSheet(best.idx)); return; }
   }
   // furniture?
   const o=scene.furnAt.get(c+','+r); if(o){ camFree=false; tapObject(o); return; }
+  // hidden cheat tiles by the bed (taps here never walk)
+  if(scene.type==='home' && cheatTileTap(c,r)) return;
   // empty walkable tile → DOUBLE-tap to walk there (single tap just confirms the spot)
   if(walkable(c,r)){
     const now=performance.now();
     if(now-lastTap.t<360 && Math.abs(lastTap.c-c)<=1 && Math.abs(lastTap.r-r)<=1){
       lastTap.t=0; pendingMove=null; camFree=false; SFX.tap(); goTo(c,r,null);
     } else { lastTap={t:now,c,r}; pendingMove={c,r,t:now}; blip(420,0.04,'sine',0.02); }
+  }
+}
+function drawCheatHint(){
+  if(!scene||scene.type!=='home'||!revealActive()) return;
+  const tiles=(homeDef().cheat)||[];
+  for(const [c,r] of tiles){ const x=(c+.5)*T-cam.x, y=(r+.5)*T-cam.y; const p=performance.now()/300;
+    ctx.fillStyle='rgba(255,215,120,'+(0.30+0.20*Math.sin(p+(c+r))).toFixed(2)+')';
+    ctx.beginPath(); ctx.arc(x,y,5+Math.sin(p)*1.5,0,7); ctx.fill();
+    ctx.font='9px -apple-system'; ctx.textAlign='center'; ctx.fillStyle='rgba(255,235,170,.85)'; ctx.fillText('✦',x,y-9); ctx.textAlign='left';
   }
 }
 function drawMoveHint(){
@@ -2459,6 +2587,7 @@ function toggleOut(){ if(!S||S.atWork||S.hospital||S.studying||transition>0) ret
   else gotoScene('town', TOWN_SPAWN);
 }
 function quickWork(){ if(!S||S.hospital||S.atWork||S.studying) return; SFX.tap();
+  if(kahunaActive()){ const pay=S.career||S.business?shiftPay():200; addCoins(pay); SFX.coin(); burst(S.px-cam.x,S.py-cam.y-30,'coin','+'+pay+'💰'); toast('🌟 Big Kahuna — paid '+pay+'💰 without lifting a finger!'); save(); return; }
   if(scene.type==='vacation'){ toast("You're on vacation — enjoy it! 🌴"); return; }
   if(scene.type==='town'){ const b=BUILDINGS.find(x=>x.id==='office'); goNextTo(b.door[0],b.door[1],()=>showWorkSheet()); }
   else { toast('Head out 🚪 to reach the office 💼'); }

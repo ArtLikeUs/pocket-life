@@ -140,6 +140,13 @@ canvas#cv { border-radius:18px; box-shadow:0 10px 40px rgba(0,0,0,.5); backgroun
 #zoomCtl button:active { background:rgba(255,255,255,.24); transform:scale(.92); }
 .helpRow { display:flex; gap:9px; align-items:flex-start; font-size:12.5px; color:#d9d3ee; margin:5px 0; line-height:1.35; }
 .helpRow .helpIc { flex:none; width:30px; text-align:center; font-size:15px; }
+.cheatBtn { display:flex; align-items:center; gap:10px; width:100%; text-align:left; margin:7px 0; padding:10px 12px;
+  border-radius:12px; border:1px solid rgba(255,215,120,.25); background:rgba(255,215,120,.08); color:#f3eaff; font-family:inherit; cursor:pointer; }
+.cheatBtn:active { background:rgba(255,215,120,.18); transform:scale(.99); }
+.cheatBtn .cheatIc { font-size:20px; flex:none; width:26px; text-align:center; }
+.cheatBtn .cheatTxt { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.cheatBtn .cheatTxt b { font-size:13.5px; }
+.cheatBtn .cheatTxt span { font-size:11.5px; color:#bdb6d6; }
 .need { display:flex; align-items:center; gap:6px; }
 .need .ic { font-size:14px; width:19px; text-align:center; }
 .need .lbl { font-size:10.5px; font-weight:700; color:#bdb6d6; width:46px; flex:none; letter-spacing:.2px; }

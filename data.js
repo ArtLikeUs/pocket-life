@@ -54,7 +54,7 @@ const HOME_TIERS = [
     {t:'phone',c:10,r:11},{t:'plant',c:1,r:12},
   ],
   exit:[[5,13],[6,13]], spawn:[5,12],
-  partnerZone:{x:6,y:10,w:4,h:3}, kidZone:{x:6,y:10,w:4,h:3},
+  partnerZone:{x:6,y:10,w:4,h:3}, kidZone:{x:6,y:10,w:4,h:3}, cheat:[[1,3],[2,3]],
 },
 {
   id:1, name:'Family House', icon:'🏡', price:2500,
@@ -92,7 +92,7 @@ const HOME_TIERS = [
     {t:'computer',c:12,r:10},{t:'phone',c:13,r:12},{t:'plant',c:1,r:13},{t:'plant',c:14,r:10},
   ],
   exit:[[7,14],[8,14]], spawn:[7,13],
-  partnerZone:{x:9,y:10,w:5,h:4}, kidZone:{x:1,y:6,w:6,h:3},
+  partnerZone:{x:9,y:10,w:5,h:4}, kidZone:{x:1,y:6,w:6,h:3}, cheat:[[1,3],[2,3]],
 },
 {
   id:2, name:'Grand Villa', icon:'🏰', price:8000,
@@ -132,7 +132,7 @@ const HOME_TIERS = [
     {t:'computer',c:15,r:10},{t:'lamp',c:18,r:10},{t:'phone',c:18,r:12},{t:'plant',c:1,r:14},{t:'plant',c:18,r:14},
   ],
   exit:[[9,15],[10,15]], spawn:[9,14],
-  partnerZone:{x:10,y:11,w:7,h:4}, kidZone:{x:1,y:6,w:8,h:3},
+  partnerZone:{x:10,y:11,w:7,h:4}, kidZone:{x:1,y:6,w:8,h:3}, cheat:[[1,3],[2,3]],
 },
 ];
 
@@ -405,6 +405,22 @@ const NEEDS = [
 ];
 // Global softener on how fast needs drain (1 = original). Lower = gentler, less of a chore.
 const NEEDS_DECAY_MULT = 0.65;
+
+/* ---------------- hired help (Wave 6) ----------------
+   One agency you contract from. Workers only appear at home while on the clock. */
+const SERVICE_ORG = 'Helping Hands Agency';
+const SERVICES = [
+  { id:'nanny', icon:'🍼', role:'Nanny', shirt:'#7fc7e0', dress:true,  blurb:'Keeps the kids happy & cared for.' },
+  { id:'chef',  icon:'🍳', role:'Chef',  shirt:'#f2f2f7', dress:false, blurb:'Cooks — keeps the family fed.' },
+  { id:'maid',  icon:'🧹', role:'Maid',  shirt:'#3a3550', dress:true,  blurb:'Cleans — keeps everyone fresh.' },
+];
+const SERVICE_DAY = 45;          // per service, per day
+const SERVICE_BUNDLE_DAY = 105;  // all three, per day (vs 135 — a deal)
+const SERVICE_TERMS = [          // prepay options
+  { id:'day',   label:'1 day',   days:1,  disc:0    },
+  { id:'week',  label:'1 week',  days:7,  disc:0.15 },
+  { id:'month', label:'1 month', days:30, disc:0.40 },
+];
 const JOBS = ['Intern','Barista','Designer','Manager','Director','CEO']; // legacy (v2 saves)
 
 /* ---------------- careers ----------------
