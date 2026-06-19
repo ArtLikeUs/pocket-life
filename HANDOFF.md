@@ -35,7 +35,7 @@ cd ~/Developer/PocketLife
 git add -A && git commit -m "…" && git push        # GitHub Pages auto-rebuilds ~1-2 min
 ```
 Verify live: `curl -s https://artlikeus.github.io/pocket-life/index.html | grep 'v=N'`.
-Current versions: **assets `?v=20`, sw `pocket-life-v16`** (next edit → v=21 / v17).
+Current versions: **assets `?v=21`, sw `pocket-life-v17`** (next edit → v=22 / v18).
 
 ## 4. CRITICAL gotchas (these bit us repeatedly)
 - **Cache-busting is mandatory.** The browser memory-caches JS even after SW unregister.
@@ -83,6 +83,14 @@ real devices, same as the transfer-code prompt — stub `window.prompt` to test 
 (4) **vacations priced as flight + rental** with a +30%/minor-kid surcharge (`vacationCost`),
 a tappable **rental cabin** (`OBJTYPES.rental`, Sleep/Freshen/Relax), and the **family rendered on
 the vacation map** (`buildHomies` vacation branch).
+
+**Wave 6 is in two ships.** Ship 1 is LIVE (v=21 / sw v17): new controls — **drag to pan** a free
+camera (`camFree`), **double-tap a tile to walk** (the pointer handler is now pointerdown/move/up with
+drag + double-tap + 2-finger pinch; `#cv` is `touch-action:none`), **zoom** (`zoom`, `BASE_VW/BASE_VH`,
+`setZoom`, `clampCam`; +/− control built in `buildNeedsUI`); **gentler needs** (`NEEDS_DECAY_MULT` in
+data.js); **infant interactions** (`babyPlay`, the crib sheet + giggle reaction, `babyGiggle`); and a
+**❓ How to Play** screen (`openHelp`, header button). **Ship 2 is NOT built yet — see `WIP-NOTES.md`**
+(recurring hired services + a hidden cheat menu).
 
 Vacation internals (Wave 5), for reference: `VACATIONS` data; `buildVacation()` generates terrain by
 `theme` and carves walkable tiles under furniture/spawn; `scene.type==='vacation'` is handled in
