@@ -35,7 +35,7 @@ cd ~/Developer/PocketLife
 git add -A && git commit -m "…" && git push        # GitHub Pages auto-rebuilds ~1-2 min
 ```
 Verify live: `curl -s https://artlikeus.github.io/pocket-life/index.html | grep 'v=N'`.
-Current versions: **assets `?v=21`, sw `pocket-life-v17`** (next edit → v=22 / v18).
+Current versions: **assets `?v=22`, sw `pocket-life-v18`** (next edit → v=23 / v19).
 
 ## 4. CRITICAL gotchas (these bit us repeatedly)
 - **Cache-busting is mandatory.** The browser memory-caches JS even after SW unregister.
@@ -89,8 +89,20 @@ camera (`camFree`), **double-tap a tile to walk** (the pointer handler is now po
 drag + double-tap + 2-finger pinch; `#cv` is `touch-action:none`), **zoom** (`zoom`, `BASE_VW/BASE_VH`,
 `setZoom`, `clampCam`; +/− control built in `buildNeedsUI`); **gentler needs** (`NEEDS_DECAY_MULT` in
 data.js); **infant interactions** (`babyPlay`, the crib sheet + giggle reaction, `babyGiggle`); and a
-**❓ How to Play** screen (`openHelp`, header button). **Ship 2 is NOT built yet — see `WIP-NOTES.md`**
-(recurring hired services + a hidden cheat menu).
+**❓ How to Play** screen (`openHelp`, header button).
+
+Ship 2 is also LIVE (v=22 / sw v18): **recurring services** — one agency (`SERVICE_ORG`, `SERVICES`,
+`SERVICE_TERMS` in data.js) hired from the home `phone` (`showServices`/`showServiceHire`/`hireService`,
+`serviceCost`); $45/day each or $105/day all three; prepay day/week(−15%)/month(−40%); term stored as a
+game-minute expiry in `S.services`; `svc(id)` = active check. Chef/Maid slow hunger/hygiene decay, Nanny
+keeps kids happy (in `tick`). Workers render at home only while hired as `kind:'staff'` homies (themed
+look, gold label), tappable → `showServiceWorker`. **Hidden cheat menu** — two tiles by the bed
+(`HOME_TIERS[].cheat`); tap A-B×3 (`cheatTileTap` in `handleTap`, before the walk logic) → `openCheats`.
+Opening costs one `shiftPay()` unless a reveal pass is active (`revealActive`); paying 40%·weekly sets
+`S.cheatRevealUntil` (free + shimmering tiles for a game-week, `drawCheatHint`). `renderCheats`: Instant
+Rich, Fulfill All Needs, **Big Kahuna** (`S.kahunaUntil`: `spend()` free, `quickWork` instant pay, 2×
+player draw scale, social ×1.5), **Game Got Em** (`S.cheatSocial`, social ×1.75) — combined in
+`socialMult()` applied to `rel()` gains in npcSocial/date/gift. **The whole Wave-6 roadmap is shipped.**
 
 Vacation internals (Wave 5), for reference: `VACATIONS` data; `buildVacation()` generates terrain by
 `theme` and carves walkable tiles under furniture/spawn; `scene.type==='vacation'` is handled in
