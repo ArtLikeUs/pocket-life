@@ -35,11 +35,19 @@ all-three week = round(105·7·0.85)=**$625**; all-three month = round(105·30·
 ## Ship 2, part B — hidden cheat menu
 
 Two **hidden floor tiles next to each other, beside the bed**. The player **taps tile A then tile B,
-three times** (A,B,A,B,A,B) to open the cheat menu. The tiles are **always active but invisible**;
-paying **40% of an estimated week's earnings** makes them shimmer (a findable hint) — until then they
-stay active but hidden. Put the reveal purchase somewhere discreet (e.g. a faint line in the ❓ Help
-screen). Compute a weekly-earnings estimate from the player's income (career `pay` × ~5, or a
-level-based fallback); see `CAREERS` in data.js (pay 160–280/shift).
+three times** (A,B,A,B,A,B) to trigger the cheat menu. The tiles are **always active but invisible**.
+
+**Reveal cost (owner-specified):**
+- **Finding the spot is not free.** Completing the A,B×3 sequence opens the menu **but charges one
+  work shift's pay each time you open it** — a coin toll, so knowing the secret still costs something.
+  Use a shift-pay estimate (the player's current career pay per shift incl. perks, or a level-based
+  fallback for unemployed/business). If they can't afford the toll, don't open (gentle toast).
+- **Or buy a pass:** paying **40% of an estimated week's earnings** **reveals the tiles (they shimmer)
+  AND makes opening the menu free for 1 week of game-time**. While the pass is active there's no
+  per-open toll; once it lapses, the tiles go hidden again and the per-open shift toll returns.
+- Estimates: shift pay ≈ career `pay` (160–280, see `CAREERS`) × perks, fallback ≈ `100 + level*8`;
+  weekly ≈ shiftPay × ~5; reveal-pass price = `round(0.40 × weekly)`. Put the pass purchase somewhere
+  discreet (e.g. a faint line in the ❓ Help screen, or offered the first time the menu is found).
 
 - Define the two tiles **per home tier** in `data.js HOME_TIERS` as `cheat:[[c,r],[c,r]]`, two adjacent
   **walkable** floor tiles next to that tier's bed (`bed2` is at c1,r1 in tiers 0 & 1; read tier 2's
@@ -70,7 +78,8 @@ level-based fallback); see `CAREERS` in data.js (pay 160–280/shift).
   contract expires (0 = not hired). Default `{nanny:0,chef:0,maid:0}`.
 - `S.kahunaUntil` — number (game-minutes), default `0`.
 - `S.cheatSocial` — bool, default `false`.
-- `S.cheatTilesRevealed` — bool, default `false`.
+- `S.cheatRevealUntil` — number (game-minutes); the reveal pass is active while `S.minutes < this`.
+  Default `0`. (Paying 40%·weekly sets it to `S.minutes + 7*1440`.)
 Migration matters: **load a pre-Ship-2 save** (an existing profile) and confirm `normalize` defaults
 these so nothing breaks.
 
